@@ -6,6 +6,7 @@ use crabdac as _; // global logger + panicking-behavior + memory layout
 #[rtic::app(device = stm32f4xx_hal::pac, dispatchers = [SPI3])]
 mod app {
     use stm32f4xx_hal::{
+        Interrupt,
         pac,
         prelude::*,
         timer::{monotonic::MonoTimer, Timer},
@@ -24,10 +25,14 @@ mod app {
     }
 
     #[monotonic(binds = TIM2, default = true)]
-    type MicrosecMono = MonoTimer<pac::TIM2, 1_000_000>;
+    type MicrosecMono = MonoTimer<Interrupt::TIM2, 1_000_000>;
 
     #[init]
     fn init(cx: init::Context) -> (Shared, Local, init::Monotonics) {
+        let rcc = cx.device.RCC.constrain();
+        let clocks = rcc.cfgr.sysclk(48.mhz()).freeze();
+        let mono = Timer::new(cx.device.TIM2, &clocks).monotonic();
+
         defmt::info!("init");
 
         task1::spawn().ok();
@@ -40,9 +45,7 @@ mod app {
             Local {
                 // Initialization of local resources go here
             },
-            init::Monotonics(
-                // Initialization of optional monotonic timers go here
-            ),
+            init::Monotonics(mono),
         )
     }
 
