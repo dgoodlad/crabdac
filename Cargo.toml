@@ -18,6 +18,11 @@ cortex-m-rtic = "0.6.0-rc.4"
 # TODO(4) enter your HAL here
 #stm32f4xx-hal = { version = "0.10.1", features = ["stm32f415", "rt", "rtic-monotonic", "i2s", "usb_fs"] }
 stm32f4xx-hal = { git = "https://github.com/stm32-rs/stm32f4xx-hal", features = ["stm32f415", "rtic", "i2s", "usb_fs"] }
+usb-device = "0.2.8"
+
+[patch.crates-io]
+usb-device = { path = "../usb-device" }
+synopsys-usb-otg = { path = "../synopsys-usb-otg", features = ["cortex-m"] }
 
 [features]
 # set logging levels here
