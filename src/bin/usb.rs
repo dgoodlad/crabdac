@@ -13,9 +13,10 @@ mod app {
         timer::{monotonic::MonoTimer, Timer},
     };
 
-    use usb_device::prelude::*;
-
-    static mut EP_MEMORY: [u32; 1024] = [0; 1024];
+    use usb_device::{
+        prelude::*,
+        class_prelude::{UsbBusAllocator}
+    };
 
     // Shared resources go here
     #[shared]
@@ -26,13 +27,13 @@ mod app {
     // Local resources go here
     #[local]
     struct Local {
-        // TODO: Add resources
+        usb_dev: UsbDevice<'static, UsbBus<USB>>,
     }
 
     #[monotonic(binds = TIM2, default = true)]
     type MicrosecMono = MonoTimer<pac::TIM2, 1_000_000>;
 
-    #[init]
+    #[init(local = [ep_memory: [u32; 1024] = [0; 1024], usb_bus: Option<UsbBusAllocator<UsbBus<USB>>> = None])]
     fn init(cx: init::Context) -> (Shared, Local, init::Monotonics) {
         let rcc = cx.device.RCC.constrain();
         let clocks = rcc.cfgr
@@ -51,14 +52,14 @@ mod app {
             usb_global: cx.device.OTG_FS_GLOBAL,
             usb_device: cx.device.OTG_FS_DEVICE,
             usb_pwrclk: cx.device.OTG_FS_PWRCLK,
-            pin_dm: gpioa.pa11.into_alternate::<10>(),
-            pin_dp: gpioa.pa12.into_alternate::<10>(),
+            pin_dm: gpioa.pa11.into_alternate(),
+            pin_dp: gpioa.pa12.into_alternate(),
             hclk: clocks.hclk(),
         };
 
-        let usb_bus = UsbBus::new(usb, unsafe { &mut EP_MEMORY });
+        *cx.local.usb_bus = Some(UsbBus::new(usb, cx.local.ep_memory));
 
-        let usb_dev = UsbDeviceBuilder::new(&usb_bus, UsbVidPid(0x1209, 0x0001))
+        let usb_dev = UsbDeviceBuilder::new(cx.local.usb_bus.as_ref().unwrap(), UsbVidPid(0x1209, 0x0001))
             .manufacturer("Crabs Pty Ltd.")
             .product("CrabDAC")
             .serial_number("TEST")
@@ -74,6 +75,7 @@ mod app {
             },
             Local {
                 // Initialization of local resources go here
+                usb_dev,
             },
             init::Monotonics(mono),
         )
