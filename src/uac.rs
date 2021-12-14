@@ -38,7 +38,17 @@ impl<'a, B: UsbBus> UsbAudioClass<'a, B> {
                 usb_device::endpoint::IsochronousUsageType::Feedback,
                 // Per the UAC1.0 spec, audio feedback packets are 3 bytes long
                 0x03,
-                // Update the feedback value as frequently as possible (once per frame)
+                // Per USB Audio Class 1.0 3.7.2.2:
+                //
+                // Feedback frequency (F_f) is available once every 2^(K - P) frames
+                // K = 10 for UAC 1.0 on USB FS interfaces with frames running at 1kHz
+                //
+                // Assuming we're running at F_m = 256 * F_s = 2^8 * F_s:
+                // F_m = F_s * 2^(P - 1)
+                // P = 9
+                // K = 10
+                //
+                // bRefresh value is the exponent, which is 10 - P = 10 - 9 = 1
                 0x01
             ),
             control_buf: [0; sizes::CONTROL_BUFFER],
@@ -134,7 +144,9 @@ impl<B: UsbBus> UsbClass<B> for UsbAudioClass<'_, B> {
         Ok(())
     }
 
-    fn poll(&mut self) {
-
+    fn endpoint_out(&mut self, addr: EndpointAddress) {
+        if addr == self.ep_audio_stream.address() {
+            defmt::debug!("Received audio stream packet");
+        }
     }
 }
