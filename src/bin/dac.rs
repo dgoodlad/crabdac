@@ -1,7 +1,7 @@
 #![no_main]
 #![no_std]
 
-use crabdac as _; // global logger + panicking-behavior + memory layout
+use crabdac as _;
 
 #[rtic::app(device = stm32f4xx_hal::pac, dispatchers = [SPI3])]
 mod app {
@@ -13,13 +13,22 @@ mod app {
         timer::{monotonic::MonoTimer, Timer},
         gpio::{Alternate, PushPull},
         gpio::gpioa::PA4,
-        gpio::gpioc::{PC10, PC12}
+        gpio::gpioc::{PC10, PC12},
+        dma::{
+            config::DmaConfig,
+            MemoryToPeripheral,
+            StreamsTuple,
+            Transfer,
+            Stream5,
+        }
     };
 
     use usb_device::prelude::*;
     use usb_device::bus::UsbBusAllocator;
 
     use crabdac::uac::UsbAudioClass;
+
+    use stm32_i2s_v12x::{self, MasterConfig, format::Data24Frame32, MasterClock, TransmitMode};
 
     // Shared resources go here
     #[shared]
@@ -32,10 +41,10 @@ mod app {
     struct Local {
         usb_dev: UsbDevice<'static, UsbBus<USB>>,
         usb_audio: UsbAudioClass<'static, UsbBus<USB>>,
-        i2s_dev: i2s::I2s<pac::SPI3, (PA4<Alternate<PushPull, 6>>,
-                                      PC10<Alternate<PushPull, 6>>,
-                                      NoMasterClock,
-                                      PC12<Alternate<PushPull, 6>>)>,
+        //i2s_dev: i2s::I2s<pac::SPI3, (PA4<Alternate<PushPull, 6>>,
+        //                              PC10<Alternate<PushPull, 6>>,
+        //                              NoMasterClock,
+        //                              PC12<Alternate<PushPull, 6>>)>,
     }
 
     #[monotonic(binds = TIM2, default = true)]
@@ -44,6 +53,7 @@ mod app {
     #[init(local = [ep_memory: [u32; 1024] = [0; 1024],
                     usb_bus: Option<UsbBusAllocator<UsbBus<USB>>> = None,
                     usb_audio_stream_buf: [u8; 768] = [0; 768],
+                    i2s_dma_buf: [u16; 1024] = [0; 1024],
     ])]
     fn init(cx: init::Context) -> (Shared, Local, init::Monotonics) {
         let rcc = cx.device.RCC.constrain();
@@ -93,6 +103,25 @@ mod app {
             ),
             &clocks
         );
+        let i2s_clock = i2s_dev.input_clock();
+
+        let mut i2s = stm32_i2s_v12x::I2s::new(i2s_dev).configure_master_transmit(
+                MasterConfig::with_sample_rate(
+                    i2s_clock.0,
+                    96000,
+                    Data24Frame32,
+                    stm32_i2s_v12x::format::FrameFormat::PhilipsI2s,
+                    stm32_i2s_v12x::Polarity::IdleHigh,
+                    MasterClock::Disable,
+                ));
+        i2s.set_dma_enabled(true);
+
+        let dma1_streams = StreamsTuple::new(cx.device.DMA1);
+        let dma_config = DmaConfig::default()
+            .memory_increment(true)
+            .transfer_complete_interrupt(true);
+        let mut dma_transfer: I2sDmaTransfer =
+            Transfer::init_memory_to_peripheral(dma1_streams.5, i2s, cx.local.i2s_dma_buf, None, dma_config);
 
         task1::spawn().ok();
 
@@ -105,7 +134,7 @@ mod app {
                 // Initialization of local resources go here
                 usb_dev,
                 usb_audio,
-                i2s_dev,
+                //i2s_dev,
             },
             init::Monotonics(mono),
         )
@@ -134,4 +163,22 @@ mod app {
         while usb_dev.poll(&mut [usb_audio]) {
         };
     }
+
+    type I2sDmaTransfer = Transfer<
+        Stream5<pac::DMA1>,
+        stm32_i2s_v12x::I2s<
+            i2s::I2s<pac::SPI3,
+                (
+                    PA4<Alternate<PushPull, 6>>,
+                    PC10<Alternate<PushPull, 6>>,
+                    NoMasterClock,
+                    PC12<Alternate<PushPull, 6>>,
+                ),
+            >,
+            TransmitMode<Data24Frame32>,
+        >,
+        MemoryToPeripheral,
+        &'static mut [u16; 1024],
+        0,
+    >;
 }
