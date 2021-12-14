@@ -11,8 +11,9 @@ mod app {
         pac,
         prelude::*,
         timer::{monotonic::MonoTimer, Timer},
-        gpio::gpioa,
-        gpio::{gpioc, Alternate, PushPull},
+        gpio::{Alternate, PushPull},
+        gpio::gpioa::PA4,
+        gpio::gpioc::{PC10, PC12}
     };
 
     use usb_device::prelude::*;
@@ -31,10 +32,10 @@ mod app {
     struct Local {
         usb_dev: UsbDevice<'static, UsbBus<USB>>,
         usb_audio: UsbAudioClass<'static, UsbBus<USB>>,
-        i2s_dev: i2s::I2s<pac::SPI3, (gpioa::PA4<Alternate<PushPull, 6>>,
-                                      gpioc::PC10<Alternate<PushPull, 6>>,
+        i2s_dev: i2s::I2s<pac::SPI3, (PA4<Alternate<PushPull, 6>>,
+                                      PC10<Alternate<PushPull, 6>>,
                                       NoMasterClock,
-                                      gpioc::PC12<Alternate<PushPull, 6>>)>,
+                                      PC12<Alternate<PushPull, 6>>)>,
     }
 
     #[monotonic(binds = TIM2, default = true)]
