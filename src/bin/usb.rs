@@ -3,7 +3,6 @@
 
 use crabdac as _; // global logger + panicking-behavior + memory layout
 
-
 #[rtic::app(device = stm32f4xx_hal::pac, dispatchers = [SPI3])]
 mod app {
     use stm32f4xx_hal::{
@@ -15,8 +14,10 @@ mod app {
 
     use usb_device::{
         prelude::*,
-        class_prelude::{UsbBusAllocator}
+        class_prelude::{UsbBusAllocator}, class::UsbClass
     };
+
+    use crabdac::uac::UsbAudioClass;
 
     // Shared resources go here
     #[shared]
@@ -28,12 +29,16 @@ mod app {
     #[local]
     struct Local {
         usb_dev: UsbDevice<'static, UsbBus<USB>>,
+        usb_audio: UsbAudioClass<'static, UsbBus<USB>>,
     }
 
     #[monotonic(binds = TIM2, default = true)]
     type MicrosecMono = MonoTimer<pac::TIM2, 1_000_000>;
 
-    #[init(local = [ep_memory: [u32; 1024] = [0; 1024], usb_bus: Option<UsbBusAllocator<UsbBus<USB>>> = None])]
+    #[init(local = [ep_memory: [u32; 1024] = [0; 1024],
+                    usb_bus: Option<UsbBusAllocator<UsbBus<USB>>> = None,
+                    usb_audio_stream_buf: [u8; 768] = [0; 768],
+    ])]
     fn init(cx: init::Context) -> (Shared, Local, init::Monotonics) {
         let rcc = cx.device.RCC.constrain();
         let clocks = rcc.cfgr
@@ -59,6 +64,8 @@ mod app {
 
         *cx.local.usb_bus = Some(UsbBus::new(usb, cx.local.ep_memory));
 
+        let usb_audio = UsbAudioClass::new(cx.local.usb_bus.as_ref().unwrap(), cx.local.usb_audio_stream_buf);
+
         let usb_dev = UsbDeviceBuilder::new(cx.local.usb_bus.as_ref().unwrap(), UsbVidPid(0x1209, 0x0001))
             .manufacturer("Crabs Pty Ltd.")
             .product("CrabDAC")
@@ -76,6 +83,7 @@ mod app {
             Local {
                 // Initialization of local resources go here
                 usb_dev,
+                usb_audio,
             },
             init::Monotonics(mono),
         )
@@ -93,9 +101,15 @@ mod app {
         }
     }
 
-    // TODO: Add tasks
     #[task]
     fn task1(_cx: task1::Context) {
         defmt::info!("Hello from task1!");
+    }
+
+    #[task(binds = OTG_FS, priority = 3, local = [usb_dev, usb_audio])]
+    fn otg_fs(cx: otg_fs::Context) {
+        let otg_fs::LocalResources { usb_dev, usb_audio } = cx.local;
+        while usb_dev.poll(&mut [usb_audio]) {
+        };
     }
 }
