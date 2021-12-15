@@ -8,11 +8,11 @@ mod app {
     use stm32f4xx_hal::{
         i2s::{self, NoMasterClock},
         otg_fs::{USB, UsbBus},
-        pac,
+        pac::{self, TIM2},
         prelude::*,
         timer::{monotonic::MonoTimer, Timer},
         gpio::{Alternate, PushPull},
-        gpio::gpioa::PA4,
+        gpio::gpioa::{PA4, PA15},
         gpio::gpioc::{PC10, PC12},
         dma::{
             config::DmaConfig,
@@ -20,7 +20,8 @@ mod app {
             StreamsTuple,
             Transfer,
             Stream5,
-        }
+        },
+        timer,
     };
 
     use usb_device::prelude::*;
@@ -47,8 +48,8 @@ mod app {
         //                              PC12<Alternate<PushPull, 6>>)>,
     }
 
-    #[monotonic(binds = TIM2, default = true)]
-    type MicrosecMono = MonoTimer<pac::TIM2, 1_000_000>;
+    #[monotonic(binds = TIM5, default = true)]
+    type MicrosecMono = MonoTimer<pac::TIM5, 1_000_000>;
 
     #[init(local = [ep_memory: [u32; 1024] = [0; 1024],
                     usb_bus: Option<UsbBusAllocator<UsbBus<USB>>> = None,
@@ -66,7 +67,7 @@ mod app {
             .require_pll48clk()
             .freeze();
 
-        let mono = Timer::new(cx.device.TIM2, &clocks).monotonic();
+        let mono = Timer::new(cx.device.TIM5, &clocks).monotonic();
 
         defmt::info!("init");
 
@@ -122,6 +123,22 @@ mod app {
             .transfer_complete_interrupt(true);
         let mut dma_transfer: I2sDmaTransfer =
             Transfer::init_memory_to_peripheral(dma1_streams.5, i2s, cx.local.i2s_dma_buf, None, dma_config);
+
+        // TODO wire up TIM2 for frequency feedback:
+        // * External clock mode
+        // * Trigger Source = ITR1
+        // * Channel 1/2/3/4 = Input Capture direct mode
+        //   * TIM2_CH2 on PA1 maybe?
+        // * 0 prescaler
+        // * Count-up
+        // * Auto-reload = 2^32
+        // * CKD = no clock division
+        // * auto-reload preload = false?
+        // * slave mode controller = ETR mode 1?
+        // * ITR1 remap TIM2 ITR1 input -> USB OTG FS SOF
+        //let feedback_timer = timer::Timer::new(cx.device.TIM2, &clocks);
+        let frequency_fb_timer = timer::Timer::new(cx.device.TIM2, &clocks);
+        let frequency_fb_timer_ch1 = gpioa.pa15.into_alternate::<1>();
 
         task1::spawn().ok();
 
@@ -181,4 +198,43 @@ mod app {
         &'static mut [u16; 1024],
         0,
     >;
+
+    pub struct InputCaptureTimer<TIM, CH1> {
+        pub(crate) tim: TIM,
+        // TODO fix this generic
+        pub(crate) ch1: CH1
+    }
+
+    impl InputCaptureTimer<pac::TIM2, PA15<Alternate<PushPull, 1>>> {
+        pub fn new(tim: TIM2, ch1: PA15<Alternate<PushPull, 1>>) -> Self {
+            Self {
+                tim,
+                ch1
+            }
+        }
+
+        pub fn start(&self) {
+            self.tim.cr2.write(|w| unsafe {
+                // Map TIMx_CH1 pin to TI1 input
+                w.ti1s().clear_bit()
+            });
+            self.tim.ccmr1_input().write(|w| unsafe { w
+                .cc2s().bits(0b01)
+                .ic2f().bits(0b0000)
+            });
+            self.tim.ccer.write(|w| unsafe { w
+                .cc2p().clear_bit()
+                .cc2np().clear_bit()
+            });
+            self.tim.smcr.write(|w| unsafe { w
+                .sms().bits(0b111)
+                .ts().bits(0b110)
+            });
+            self.tim.or.write(|w| unsafe { w
+                // Internally map the USB OTG FS SOF signal to the timer's ITR1
+                // trigger input
+                .itr1_rmp().bits(0b10)
+            });
+        }
+    }
 }
