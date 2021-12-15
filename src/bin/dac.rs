@@ -63,7 +63,7 @@ mod app {
             .sysclk(168.mhz())
             .pclk1(42.mhz())
             .pclk2(84.mhz())
-            .i2s_clk(172.mhz())
+            .i2s_clk(24576.khz())
             .require_pll48clk()
             .freeze();
 
