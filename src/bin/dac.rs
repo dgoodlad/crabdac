@@ -202,7 +202,7 @@ mod app {
     pub struct InputCaptureTimer<TIM, CH1> {
         pub(crate) tim: TIM,
         // TODO fix this generic
-        pub(crate) ch1: CH1
+        ch1: CH1
     }
 
     impl InputCaptureTimer<pac::TIM2, PA15<Alternate<PushPull, 1>>> {
@@ -214,10 +214,24 @@ mod app {
         }
 
         pub fn start(&self) {
-            self.tim.cr2.write(|w| unsafe {
-                // Map TIMx_CH1 pin to TI1 input
-                w.ti1s().clear_bit()
+            // OTG_FS_SOF -> ITR1
+            self.tim.or.write(|w| unsafe { w
+                .itr1_rmp().bits(0b10)
             });
+
+            // Enable Capture/Compare interrupts
+            self.tim.dier.write(|w| w.cc1ie().set_bit() );
+
+            // External Clock Mode 1
+            // IC1 -> IC1
+            self.tim.ccmr1_input().write(|w| unsafe { w
+                .cc1s().bits(0b01)
+            });
+
+            unsafe { self.tim.cr2.write_with_zero(|w| w
+                .ti1s().clear_bit()
+            )};
+
             self.tim.ccmr1_input().write(|w| unsafe { w
                 .cc2s().bits(0b01)
                 .ic2f().bits(0b0000)
@@ -230,11 +244,7 @@ mod app {
                 .sms().bits(0b111)
                 .ts().bits(0b110)
             });
-            self.tim.or.write(|w| unsafe { w
-                // Internally map the USB OTG FS SOF signal to the timer's ITR1
-                // trigger input
-                .itr1_rmp().bits(0b10)
-            });
+
         }
     }
 }
