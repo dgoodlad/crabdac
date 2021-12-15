@@ -12,7 +12,7 @@ mod app {
         prelude::*,
         timer::{monotonic::MonoTimer, Timer},
         gpio::{Alternate, PushPull},
-        gpio::gpioa::{PA4, PA15},
+        gpio::gpioa::{PA4, PA5, PA15},
         gpio::gpioc::{PC10, PC12},
         dma::{
             config::DmaConfig,
@@ -27,7 +27,8 @@ mod app {
     use usb_device::prelude::*;
     use usb_device::bus::UsbBusAllocator;
 
-    use crabdac::uac::UsbAudioClass;
+    use crabdac::{uac::UsbAudioClass, timer::{ExternalTriggerPin, CaptureChannel}};
+    use crabdac::timer::UsbAudioFrequencyFeedback;
 
     use stm32_i2s_v12x::{self, MasterConfig, format::Data24Frame32, MasterClock, TransmitMode};
 
@@ -137,8 +138,10 @@ mod app {
         // * slave mode controller = ETR mode 1?
         // * ITR1 remap TIM2 ITR1 input -> USB OTG FS SOF
         //let feedback_timer = timer::Timer::new(cx.device.TIM2, &clocks);
-        let frequency_fb_timer = timer::Timer::new(cx.device.TIM2, &clocks);
-        let frequency_fb_timer_ch1 = gpioa.pa15.into_alternate::<1>();
+        //let frequency_fb_timer = timer::Timer::new(cx.device.TIM2, &clocks);
+        //let frequency_fb_timer_ch1 = gpioa.pa15.into_alternate::<1>();
+        //let fftimer = UsbAudioFrequencyFeedback::<TIM2, PA5<Alternate<PushPull, 1>>, CaptureChannel<TIM2, 1>>::new(cx.device.TIM2, gpioa.pa5.into_alternate());
+        let fftimer = UsbAudioFrequencyFeedback::<TIM2, PA5<Alternate<PushPull, 1>>, CaptureChannel<TIM2, 1>>::new(cx.device.TIM2, gpioa.pa5.into_alternate());
 
         task1::spawn().ok();
 
@@ -198,53 +201,4 @@ mod app {
         &'static mut [u16; 1024],
         0,
     >;
-
-    pub struct InputCaptureTimer<TIM, CH1> {
-        pub(crate) tim: TIM,
-        // TODO fix this generic
-        ch1: CH1
-    }
-
-    impl InputCaptureTimer<pac::TIM2, PA15<Alternate<PushPull, 1>>> {
-        pub fn new(tim: TIM2, ch1: PA15<Alternate<PushPull, 1>>) -> Self {
-            Self {
-                tim,
-                ch1
-            }
-        }
-
-        pub fn start(&self) {
-            // OTG_FS_SOF -> ITR1
-            self.tim.or.write(|w| unsafe { w
-                .itr1_rmp().bits(0b10)
-            });
-
-            // Enable Capture/Compare interrupts
-            self.tim.dier.write(|w| w.cc1ie().set_bit() );
-
-            // External Clock Mode 1
-            // IC1 -> IC1
-            self.tim.ccmr1_input().write(|w| unsafe { w
-                .cc1s().bits(0b01)
-            });
-
-            unsafe { self.tim.cr2.write_with_zero(|w| w
-                .ti1s().clear_bit()
-            )};
-
-            self.tim.ccmr1_input().write(|w| unsafe { w
-                .cc2s().bits(0b01)
-                .ic2f().bits(0b0000)
-            });
-            self.tim.ccer.write(|w| unsafe { w
-                .cc2p().clear_bit()
-                .cc2np().clear_bit()
-            });
-            self.tim.smcr.write(|w| unsafe { w
-                .sms().bits(0b111)
-                .ts().bits(0b110)
-            });
-
-        }
-    }
 }

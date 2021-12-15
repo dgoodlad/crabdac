@@ -1,4 +1,5 @@
 use core::convert::Infallible;
+use core::marker::PhantomData;
 
 use stm32f4xx_hal::adc::config::ExternalTrigger;
 use stm32f4xx_hal::gpio::{Alternate, PushPull};
@@ -11,20 +12,12 @@ impl ExternalTriggerPin<TIM2> for gpioa::PA0<Alternate<PushPull, 1>> {}
 impl ExternalTriggerPin<TIM2> for gpioa::PA5<Alternate<PushPull, 1>> {}
 impl ExternalTriggerPin<TIM2> for gpioa::PA15<Alternate<PushPull, 1>> {}
 
-pub trait ChannelPin<TIM, const CH: u8> {}
+pub struct CaptureChannel<TIM, const CH: u8> (PhantomData<TIM>);
 
-// TODO use features to enumerate these per device type
-impl ChannelPin<TIM2, 1> for gpioa::PA0<Alternate<PushPull, 1>> {}
-impl ChannelPin<TIM2, 2> for gpioa::PA1<Alternate<PushPull, 1>> {}
-impl ChannelPin<TIM2, 3> for gpioa::PA2<Alternate<PushPull, 1>> {}
-impl ChannelPin<TIM2, 4> for gpioa::PA3<Alternate<PushPull, 1>> {}
-
-impl ChannelPin<TIM2, 2> for gpiob::PB3<Alternate<PushPull, 1>> {}
-impl ChannelPin<TIM2, 3> for gpiob::PB10<Alternate<PushPull, 1>> {}
-impl ChannelPin<TIM2, 4> for gpiob::PB11<Alternate<PushPull, 1>> {}
-
-impl ChannelPin<TIM2, 1> for gpioa::PA5<Alternate<PushPull, 1>> {}
-impl ChannelPin<TIM2, 1> for gpioa::PA15<Alternate<PushPull, 1>> {}
+impl CaptureChannel<TIM2, 1> {}
+impl CaptureChannel<TIM2, 2> {}
+impl CaptureChannel<TIM2, 3> {}
+impl CaptureChannel<TIM2, 4> {}
 
 #[repr(u8)]
 enum ITR1_RMP {
@@ -34,23 +27,15 @@ enum ITR1_RMP {
     OTG_HS_SOF  = 0b11,
 }
 
-#[repr(u8)]
-enum CaptureChannel {
-    CH1,
-    CH2,
-    CH3,
-    CH4,
-}
-
-trait UsbFrameTimer {
+pub trait UsbFrameTimer<CH> {
     fn connect_trc(&self);
-    fn configure_channel(&self, channel: CaptureChannel);
+    fn configure_channel(&self);
 
     fn enable(&self);
     fn disable(&self);
 }
 
-impl UsbFrameTimer for TIM2 {
+impl<const CH: u8> UsbFrameTimer<CaptureChannel<TIM2, CH>> for TIM2 {
     // Configure the timer to use the OTG_FS_SOF signal as TRC, which is
     // usable as the trigger signal for input capture channels
     fn connect_trc(&self) {
@@ -65,25 +50,27 @@ impl UsbFrameTimer for TIM2 {
         });
     }
 
-    fn configure_channel(&self, channel: CaptureChannel) {
-        match channel {
-            CaptureChannel::CH1 => {
+    fn configure_channel(&self) {
+        match CH {
+            1 => {
                 self.ccmr1_input().write(|w| w.cc1s().trc());
                 self.dier.write(|w| w.cc1ie().enabled());
             },
-            CaptureChannel::CH2 => {
+            2 => {
                 self.ccmr1_input().write(|w| w.cc2s().trc());
                 self.dier.write(|w| w.cc2ie().enabled());
             },
-            CaptureChannel::CH3 => {
+            3 => {
                 self.ccmr2_input().write(|w| w.cc3s().trc());
                 self.dier.write(|w| w.cc3ie().enabled());
 
             },
-            CaptureChannel::CH4 => {
+            4 => {
                 self.ccmr2_input().write(|w| w.cc4s().trc());
                 self.dier.write(|w| w.cc4ie().enabled());
             },
+            0_u8 => { panic!("Invalid channel") }
+            5_u8..=u8::MAX => { panic!("Invalid channel") }
         }
     }
 
@@ -96,7 +83,7 @@ impl UsbFrameTimer for TIM2 {
     }
 }
 
-trait ExternallyClockedTimer {
+pub trait ExternallyClockedTimer {
     fn configure_external_clock(&self) {}
 }
 
@@ -113,22 +100,23 @@ impl ExternallyClockedTimer for TIM2 {
     }
 }
 
-struct UsbAudioFrequencyFeedback<TIM, PIN> {
+pub struct UsbAudioFrequencyFeedback<TIM, PIN, CH> {
     tim: TIM,
     pin: PIN,
+    _ch: PhantomData<CH>,
 }
 
-impl<TIM, PIN> UsbAudioFrequencyFeedback<TIM, PIN>
+impl<TIM, PIN, CH> UsbAudioFrequencyFeedback<TIM, PIN, CH>
 where
-    TIM: UsbFrameTimer + ExternallyClockedTimer,
+    TIM: UsbFrameTimer<CH> + ExternallyClockedTimer,
     PIN: ExternalTriggerPin<TIM>
 {
-    pub fn new(tim: TIM, pin: PIN, channel: CaptureChannel) -> Self {
+    pub fn new(tim: TIM, pin: PIN) -> Self {
         tim.connect_trc();
         tim.configure_external_clock();
-        tim.configure_channel(channel);
+        //tim.configure_channel(channel);
 
-        Self { tim, pin }
+        Self { tim, pin, _ch: PhantomData }
     }
 
     pub fn start(&self) {
