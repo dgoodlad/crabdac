@@ -35,7 +35,7 @@ mod app {
     #[monotonic(binds = TIM2, default = true)]
     type MicrosecMono = MonoTimer<pac::TIM2, 1_000_000>;
 
-    #[init(local = [ep_memory: [u32; 1024] = [0; 1024],
+    #[init(local = [ep_memory: [u32; 4096] = [0; 4096],
                     usb_bus: Option<UsbBusAllocator<UsbBus<USB>>> = None,
                     usb_audio_stream_buf: [u8; 768] = [0; 768],
     ])]
@@ -63,10 +63,11 @@ mod app {
         };
 
         *cx.local.usb_bus = Some(UsbBus::new(usb, cx.local.ep_memory));
+        let usb_bus = cx.local.usb_bus.as_ref().unwrap();
 
-        let usb_audio = UsbAudioClass::new(cx.local.usb_bus.as_ref().unwrap(), cx.local.usb_audio_stream_buf);
+        let usb_audio = UsbAudioClass::new(usb_bus, cx.local.usb_audio_stream_buf);
 
-        let usb_dev = UsbDeviceBuilder::new(cx.local.usb_bus.as_ref().unwrap(), UsbVidPid(0x1209, 0x0001))
+        let usb_dev = UsbDeviceBuilder::new(usb_bus, UsbVidPid(0x1209, 0x0001))
             .manufacturer("Crabs Pty Ltd.")
             .product("CrabDAC")
             .serial_number("TEST")
@@ -108,8 +109,10 @@ mod app {
 
     #[task(binds = OTG_FS, priority = 3, local = [usb_dev, usb_audio])]
     fn otg_fs(cx: otg_fs::Context) {
+        defmt::debug!("OTG_FS Interrupt");
         let otg_fs::LocalResources { usb_dev, usb_audio } = cx.local;
         while usb_dev.poll(&mut [usb_audio]) {
+            defmt::debug!("Polling usb audio");
         };
     }
 }

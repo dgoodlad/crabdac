@@ -2,7 +2,7 @@ use usb_device::{class_prelude::*, descriptor::descriptor_type};
 
 mod sizes {
     pub const CONTROL_BUFFER: usize = 256;
-    pub const AUDIO_STREAM_BUFFER: usize = 96000 * 2 * 4 / 1000 + 1;
+    pub const AUDIO_STREAM_BUFFER: usize = (96000 * 2 * 4 / 1000) / 4 + 1;
 }
 
 mod consts {
