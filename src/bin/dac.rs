@@ -42,10 +42,12 @@ mod app {
     struct Local {
         usb_dev: UsbDevice<'static, UsbBus<USB>>,
         usb_audio: UsbAudioClass<'static, UsbBus<USB>>,
-        //i2s_dev: i2s::I2s<pac::SPI3, (PA4<Alternate<PushPull, 6>>,
-        //                              PC10<Alternate<PushPull, 6>>,
-        //                              NoMasterClock,
-        //                              PC12<Alternate<PushPull, 6>>)>,
+        //i2s: stm32_i2s_v12x::I2s<pac::SPI3, ()>,
+        i2s: stm32_i2s_v12x::I2s<i2s::I2s<pac::SPI3, (PA4<Alternate<PushPull, 6>>,
+                                                      PC10<Alternate<PushPull, 6>>,
+                                                      NoMasterClock,
+                                                      PC12<Alternate<PushPull, 6>>)>,
+                                 TransmitMode<Data24Frame32>>,
     }
 
     #[monotonic(binds = TIM5, default = true)]
