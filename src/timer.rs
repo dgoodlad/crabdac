@@ -1,7 +1,5 @@
-use core::convert::Infallible;
 use core::marker::PhantomData;
 
-use stm32f4xx_hal::adc::config::ExternalTrigger;
 use stm32f4xx_hal::gpio::{Alternate, PushPull};
 
 use crate::hal::pac::TIM2;
@@ -19,12 +17,55 @@ impl CaptureChannel<TIM2, 2> {}
 impl CaptureChannel<TIM2, 3> {}
 impl CaptureChannel<TIM2, 4> {}
 
+#[doc = "ITR1 remap"]
+#[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u8)]
-enum ITR1_RMP {
+pub enum TIM2_ITR1_RMP_A {
     TIM8_TRGOUT = 0b00,
     PTP_TRGOUT  = 0b01,
     OTG_FS_SOF  = 0b10,
     OTG_HS_SOF  = 0b11,
+}
+impl From<TIM2_ITR1_RMP_A> for u8 {
+    #[inline(always)]
+    fn from(variant: TIM2_ITR1_RMP_A) -> Self {
+        variant as _
+    }
+}
+
+pub trait Tim2Itr1Remap<'a>: Sized {
+    type W;
+
+    fn variant(self, variant: TIM2_ITR1_RMP_A) -> &'a mut Self::W;
+
+    #[inline(always)]
+    fn tim8_trgout(self) -> &'a mut Self::W {
+        self.variant(TIM2_ITR1_RMP_A::TIM8_TRGOUT)
+    }
+
+    #[inline(always)]
+    fn ptp_trgout(self) -> &'a mut Self::W {
+        self.variant(TIM2_ITR1_RMP_A::PTP_TRGOUT)
+    }
+
+    #[inline(always)]
+    fn usb_fs_otg(self) -> &'a mut Self::W {
+        self.variant(TIM2_ITR1_RMP_A::OTG_FS_SOF)
+    }
+
+    #[inline(always)]
+    fn usb_hs_otg(self) -> &'a mut Self::W {
+        self.variant(TIM2_ITR1_RMP_A::OTG_HS_SOF)
+    }
+}
+
+impl<'a> Tim2Itr1Remap<'a> for crate::hal::pac::tim2::or::ITR1_RMP_W<'a> {
+    type W = crate::hal::pac::tim2::or::W;
+
+    #[inline(always)]
+    fn variant(self, variant: TIM2_ITR1_RMP_A) -> &'a mut Self::W {
+        unsafe { self.bits(variant.into()) }
+    }
 }
 
 pub trait UsbFrameTimer<CH> {
@@ -40,14 +81,13 @@ impl<const CH: u8> UsbFrameTimer<CaptureChannel<TIM2, CH>> for TIM2 {
     // usable as the trigger signal for input capture channels
     fn connect_trc(&self) {
         // Internally map the OTG_FS_SOF signal to ITR1
-        self.or.write(|w| unsafe {
-            w.itr1_rmp().bits(ITR1_RMP::OTG_FS_SOF as u8)
-        });
+        //self.or.write(|w| unsafe {
+        //    w.itr1_rmp().bits(ITR1_RMP::OTG_FS_SOF as u8)
+        //});
+        self.or.write(|w| w.itr1_rmp().variant(TIM2_ITR1_RMP_A::OTG_FS_SOF));
 
         // Set ITR1 as the clock synchronisation trigger, TRC
-        self.smcr.write(|w| { w
-            .ts().itr1()
-        });
+        self.smcr.write(|w| w.ts().itr1());
     }
 
     fn configure_channel(&self) {

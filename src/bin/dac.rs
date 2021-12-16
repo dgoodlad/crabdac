@@ -12,7 +12,7 @@ mod app {
         prelude::*,
         timer::{monotonic::MonoTimer, Timer},
         gpio::{Alternate, PushPull},
-        gpio::gpioa::{PA4, PA5, PA15},
+        gpio::gpioa::{PA4, PA5},
         gpio::gpioc::{PC10, PC12},
         dma::{
             config::DmaConfig,
@@ -21,14 +21,13 @@ mod app {
             Transfer,
             Stream5,
         },
-        timer,
     };
 
     use usb_device::prelude::*;
     use usb_device::bus::UsbBusAllocator;
 
-    use crabdac::{uac::UsbAudioClass, timer::{ExternalTriggerPin, CaptureChannel}};
-    use crabdac::timer::UsbAudioFrequencyFeedback;
+    use crabdac::uac::UsbAudioClass;
+    use crabdac::timer::{UsbAudioFrequencyFeedback, CaptureChannel};
 
     use stm32_i2s_v12x::{self, MasterConfig, format::Data24Frame32, MasterClock, TransmitMode};
 
