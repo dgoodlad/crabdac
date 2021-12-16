@@ -59,11 +59,11 @@ mod app {
     fn init(cx: init::Context) -> (Shared, Local, init::Monotonics) {
         let rcc = cx.device.RCC.constrain();
         let clocks = rcc.cfgr
-            .use_hse(25.mhz())
-            .sysclk(168.mhz())
-            .pclk1(42.mhz())
-            .pclk2(84.mhz())
-            .i2s_clk(24576.khz())
+            .use_hse(8.mhz())
+            .sysclk(180.mhz())
+            .pclk1(45.mhz())
+            .pclk2(90.mhz())
+            .i2s_apb1_clk(24571.khz())
             .require_pll48clk()
             .freeze();
 

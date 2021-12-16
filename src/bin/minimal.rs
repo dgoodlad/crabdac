@@ -8,7 +8,7 @@ mod app {
     use stm32f4xx_hal::{
         pac,
         prelude::*,
-        timer::{monotonic::MonoTimer, Timer},
+        timer::{monotonic::MonoTimer, monotonic::ExtU32, Timer},
     };
 
     // Shared resources go here
@@ -64,5 +64,6 @@ mod app {
     #[task]
     fn task1(_cx: task1::Context) {
         defmt::info!("Hello from task1!");
+        task1::spawn_after(1.secs()).unwrap();
     }
 }
