@@ -155,7 +155,7 @@ mod app {
                 // Initialization of local resources go here
                 usb_dev,
                 usb_audio,
-                //i2s_dev,
+                i2s,
             },
             init::Monotonics(mono),
         )
