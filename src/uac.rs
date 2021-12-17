@@ -1,8 +1,17 @@
 use usb_device::{class_prelude::*, descriptor::descriptor_type};
 
+const CHANNELS: u32 = 2;
+const SAMPLING_RATE: u32 = 96_000;
+const BITS_PER_SAMPLE: u32 = 24;
+const BYTES_PER_SAMPLE: u32 = 4;
+const USB_FRAME_FREQUENCY: u32 = 1_000;
+
 mod sizes {
+    use super::{SAMPLING_RATE, USB_FRAME_FREQUENCY, BYTES_PER_SAMPLE, CHANNELS};
+
     pub const CONTROL_BUFFER: usize = 256;
-    pub const AUDIO_STREAM_BUFFER: usize = (96000 * 2 * 4 / 1000) / 4 + 1;
+    pub const AUDIO_STREAM_BUFFER: usize =
+        ((SAMPLING_RATE / USB_FRAME_FREQUENCY + 1) * BYTES_PER_SAMPLE * CHANNELS) as usize;
 }
 
 mod consts {
