@@ -7,7 +7,7 @@ use crabdac as _;
 mod app {
     use stm32f4xx_hal::{
         i2s::{self, NoMasterClock},
-        otg_fs::{USB, UsbBus},
+        otg_fs::{USB, UsbBus, UsbBusType},
         pac::{self, TIM2},
         prelude::*,
         timer::{monotonic::MonoTimer, Timer},
@@ -15,11 +15,12 @@ mod app {
         gpio::gpioa::{PA4, PA5},
         gpio::gpioc::{PC10, PC12},
         dma::{
-            config::DmaConfig,
+            config::{DmaConfig, FifoThreshold},
             MemoryToPeripheral,
             StreamsTuple,
             Transfer,
             Stream5,
+            traits::StreamISR,
         },
     };
 
@@ -40,21 +41,16 @@ mod app {
     // Local resources go here
     #[local]
     struct Local {
-        usb_dev: UsbDevice<'static, UsbBus<USB>>,
-        usb_audio: UsbAudioClass<'static, UsbBus<USB>>,
-        //i2s: stm32_i2s_v12x::I2s<pac::SPI3, ()>,
-        i2s: stm32_i2s_v12x::I2s<i2s::I2s<pac::SPI3, (PA4<Alternate<PushPull, 6>>,
-                                                      PC10<Alternate<PushPull, 6>>,
-                                                      NoMasterClock,
-                                                      PC12<Alternate<PushPull, 6>>)>,
-                                 TransmitMode<Data24Frame32>>,
+        usb_dev: UsbDevice<'static, UsbBusType>,
+        usb_audio: UsbAudioClass<'static, UsbBusType>,
+        i2s_dma: I2sDmaTransfer,
     }
 
     #[monotonic(binds = TIM5, default = true)]
     type MicrosecMono = MonoTimer<pac::TIM5, 1_000_000>;
 
     #[init(local = [ep_memory: [u32; 1024] = [0; 1024],
-                    usb_bus: Option<UsbBusAllocator<UsbBus<USB>>> = None,
+                    usb_bus: Option<UsbBusAllocator<UsbBusType>> = None,
                     usb_audio_stream_buf: [u8; 768] = [0; 768],
                     i2s_dma_buf: [u16; 1024] = [0; 1024],
     ])]
@@ -121,10 +117,15 @@ mod app {
 
         let dma1_streams = StreamsTuple::new(cx.device.DMA1);
         let dma_config = DmaConfig::default()
+            .double_buffer(true)
             .memory_increment(true)
             .transfer_complete_interrupt(true);
         let mut dma_transfer: I2sDmaTransfer =
             Transfer::init_memory_to_peripheral(dma1_streams.5, i2s, cx.local.i2s_dma_buf, None, dma_config);
+        dma_transfer.start(|i2s| {
+            defmt::info!("Started I2S DMA stream");
+            i2s.enable();
+        });
 
         // TODO wire up TIM2 for frequency feedback:
         // * External clock mode
@@ -155,7 +156,7 @@ mod app {
                 // Initialization of local resources go here
                 usb_dev,
                 usb_audio,
-                i2s,
+                i2s_dma: dma_transfer,
             },
             init::Monotonics(mono),
         )
@@ -183,6 +184,15 @@ mod app {
         let otg_fs::LocalResources { usb_dev, usb_audio } = cx.local;
         while usb_dev.poll(&mut [usb_audio]) {
         };
+    }
+
+    #[task(binds = DMA1_STREAM5, priority = 3, local = [i2s_dma])]
+    fn dma1_stream5(cx: dma1_stream5::Context) {
+        defmt::trace!("DMA1_STREAM5 interrupt");
+        let dma1_stream5::LocalResources { i2s_dma } = cx.local;
+        if Stream5::<pac::DMA1>::get_transfer_complete_flag() {
+            i2s_dma.clear_transfer_complete_interrupt();
+        }
     }
 
     type I2sDmaTransfer = Transfer<
