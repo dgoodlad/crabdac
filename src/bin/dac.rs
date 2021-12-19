@@ -5,6 +5,7 @@ use crabdac as _;
 
 #[rtic::app(device = stm32f4xx_hal::pac, dispatchers = [SPI3])]
 mod app {
+    use as_slice::AsMutSlice;
     use stm32f4xx_hal::{
         i2s::{self, NoMasterClock},
         otg_fs::{USB, UsbBus, UsbBusType},
@@ -15,7 +16,7 @@ mod app {
         gpio::gpioa::{PA4, PA5},
         gpio::gpioc::{PC10, PC12},
         dma::{
-            config::{DmaConfig, FifoThreshold},
+            config::{DmaConfig},
             MemoryToPeripheral,
             StreamsTuple,
             Transfer,
@@ -32,10 +33,15 @@ mod app {
 
     use stm32_i2s_v12x::{self, MasterConfig, format::Data24Frame32, MasterClock, TransmitMode};
 
+    unsafe impl<T: ReadTarget> ReadTarget for [T; 392] {}
+    unsafe impl<T: WriteTarget> WriteTarget for [T; 392] {}
+
+    type AUDIO_BUFFER = [u16; (96000 / 1000 + 2) * 2 * 2];
+
     // Shared resources go here
     #[shared]
     struct Shared {
-        // TODO: Add resources
+        buffer: &'static mut AUDIO_BUFFER
     }
 
     // Local resources go here
@@ -53,6 +59,8 @@ mod app {
                     usb_bus: Option<UsbBusAllocator<UsbBusType>> = None,
                     usb_audio_stream_buf: [u8; 768] = [0; 768],
                     i2s_dma_buf: [u16; 1024] = [0; 1024],
+                    buffer_a: AUDIO_BUFFER = [0; 392],
+                    buffer_b: AUDIO_BUFFER = [0; 392],
     ])]
     fn init(cx: init::Context) -> (Shared, Local, init::Monotonics) {
         let rcc = cx.device.RCC.constrain();
@@ -117,11 +125,13 @@ mod app {
 
         let dma1_streams = StreamsTuple::new(cx.device.DMA1);
         let dma_config = DmaConfig::default()
-            .double_buffer(true)
-            .memory_increment(true)
+            .double_buffer(false)
+            .fifo_enable(true)
+            .fifo_threshold(stm32f4xx_hal::dma::config::FifoThreshold::HalfFull)
+            .priority(stm32f4xx_hal::dma::config::Priority::VeryHigh)
             .transfer_complete_interrupt(true);
         let mut dma_transfer: I2sDmaTransfer =
-            Transfer::init_memory_to_peripheral(dma1_streams.5, i2s, cx.local.i2s_dma_buf, None, dma_config);
+            Transfer::init_memory_to_peripheral(dma1_streams.5, i2s, cx.local.buffer_b, None, dma_config);
         dma_transfer.start(|i2s| {
             defmt::info!("Started I2S DMA stream");
             i2s.enable();
@@ -150,7 +160,7 @@ mod app {
         // Setup the monotonic timer
         (
             Shared {
-                // Initialization of shared resources go here
+                buffer: cx.local.buffer_a
             },
             Local {
                 // Initialization of local resources go here
@@ -209,7 +219,21 @@ mod app {
             TransmitMode<Data24Frame32>,
         >,
         MemoryToPeripheral,
-        &'static mut [u16; 1024],
+        &'static mut [u16; 96000 / 1000 * 2 * 2],
         0,
     >;
+
+    struct AudioBuffer<B> {
+        buf: B
+    }
+
+    impl<B, Word> AudioBuffer<B>
+    where
+        B: DerefMut,
+        B::Target: AsMutSlice<Element = Word>
+    {
+        fn new(buf: B) {
+            Self { buf }
+        }
+    }
 }

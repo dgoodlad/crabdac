@@ -1,10 +1,16 @@
+use core::{ops::DerefMut, pin::Pin};
+
 use usb_device::{class_prelude::*, descriptor::descriptor_type};
+use as_slice::AsMutSlice;
+
+use self::sizes::AUDIO_STREAM_BUFFER;
 
 const CHANNELS: u32 = 2;
 const SAMPLING_RATE: u32 = 96_000;
 const BITS_PER_SAMPLE: u32 = 24;
 const BYTES_PER_SAMPLE: u32 = 4;
 const USB_FRAME_FREQUENCY: u32 = 1_000;
+const EXPECTED_SAMPLES_PER_FRAME: u32 = SAMPLING_RATE / USB_FRAME_FREQUENCY;
 
 mod sizes {
     use super::{SAMPLING_RATE, USB_FRAME_FREQUENCY, BYTES_PER_SAMPLE, CHANNELS};
@@ -27,11 +33,16 @@ pub struct UsbAudioClass<'a, B: UsbBus> {
     iface_audio_stream: InterfaceNumber,
     ep_audio_stream: EndpointOut<'a, B>,
     ep_audio_stream_fb: EndpointIn<'a, B>,
-    control_buf: [u8; sizes::CONTROL_BUFFER],
+    //control_buf: [u8; sizes::CONTROL_BUFFER],
     audio_stream_buf: &'a mut [u8],
+    overflow_buf: [u32; 4],
+    extra_samples: heapless::Deque<u8, {(2 * BYTES_PER_SAMPLE * CHANNELS) as usize}>,
 }
 
-impl<'a, B: UsbBus> UsbAudioClass<'a, B> {
+impl<'a, B> UsbAudioClass<'a, B>
+where
+    B: UsbBus
+{
     pub fn new(alloc: &'a UsbBusAllocator<B>, audio_stream_buf: &'a mut [u8]) -> UsbAudioClass<'a, B> {
         Self {
             iface_audio_control: alloc.interface(),
@@ -60,9 +71,26 @@ impl<'a, B: UsbBus> UsbAudioClass<'a, B> {
                 // bRefresh value is the exponent, which is 10 - P = 10 - 9 = 1
                 0x01
             ),
-            control_buf: [0; sizes::CONTROL_BUFFER],
+            //control_buf: [0; sizes::CONTROL_BUFFER],
             audio_stream_buf,
+            overflow_buf: [0; 4],
+            extra_samples: 0,
         }
+    }
+
+    fn read_audio_stream(mut self, buffer: &mut [u8; AUDIO_STREAM_BUFFER]) -> Result<usize, UsbError>
+    {
+        self.ep_audio_stream.read(buffer.as_mut_slice()).map(|bytes_received| {
+            let samples_received = bytes_received as u32 / BYTES_PER_SAMPLE / CHANNELS;
+            let extra_samples = samples_received - EXPECTED_SAMPLES_PER_FRAME;
+            if extra_samples > 0 {
+                let (expected, extra) = buffer.split_at(buffer.len() - (extra_samples * BYTES_PER_SAMPLE * CHANNELS) as usize);
+                for x in extra.iter() {
+                    self.extra_samples.push_back(*x);
+                }
+            }
+            bytes_received
+        })
     }
 }
 
@@ -156,6 +184,11 @@ impl<B: UsbBus> UsbClass<B> for UsbAudioClass<'_, B> {
     fn endpoint_out(&mut self, addr: EndpointAddress) {
         if addr == self.ep_audio_stream.address() {
             defmt::debug!("Received audio stream packet");
+            self.ep_audio_stream.read(&mut self.audio_stream_buf).map_or_else(|size| {
+                defmt::debug!("Received {=u32} bytes of audio data", size);
+            }, |err| {
+                defmt::warn!("Error in audio stream packet read: {}", err);
+            });
         }
     }
 }
