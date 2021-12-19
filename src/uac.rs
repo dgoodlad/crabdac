@@ -185,10 +185,10 @@ impl<B: UsbBus> UsbClass<B> for UsbAudioClass<'_, B> {
     fn endpoint_out(&mut self, addr: EndpointAddress) {
         if addr == self.ep_audio_stream.address() {
             defmt::debug!("Received audio stream packet");
-            self.ep_audio_stream.read(&mut self.audio_stream_buf).map_or_else(|size| {
-                defmt::debug!("Received {=u32} bytes of audio data", size);
-            }, |err| {
-                defmt::warn!("Error in audio stream packet read: {}", err);
+            self.ep_audio_stream.read(&mut self.audio_stream_buf).map_or_else(|err| {
+                defmt::warn!("Error in audio stream packet read");
+            }, |size| {
+                defmt::debug!("Received {=usize} bytes of audio data", size);
             });
         }
     }

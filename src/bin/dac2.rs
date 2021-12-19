@@ -9,7 +9,7 @@ mod app {
 
     use bbqueue;
     use bbqueue::GrantR;
-    use embedded_dma::ReadBuffer;
+    use bytemuck::*;
     use embedded_dma::StaticReadBuffer;
     use stable_deref_trait::StableDeref;
     use stm32f4xx_hal::prelude::*;
@@ -58,6 +58,9 @@ mod app {
 
         let (producer, consumer) = cx.local.audio_queue.try_split().unwrap();
 
+        usb_handler::spawn().ok();
+        i2s_dma_handler::spawn().ok();
+
         (
             Shared {},
             Local {
@@ -79,12 +82,26 @@ mod app {
 
     #[task(local = [producer])]
     fn usb_handler(cx: usb_handler::Context) {
+        let mut sample_1: [u8; 4] = [0x00, 0x02, 0x04, 0x06];
+        let mut sample_2: [u8; 4] = [0x01, 0x03, 0x05, 0x07];
+
         let usb_handler::LocalResources { producer } = cx.local;
         let mut grant = producer.grant_exact(MAX_FRAME_SIZE).unwrap();
 
         let len = MAX_FRAME_SIZE - (SAMPLE_WORD_SIZE * CHANNELS as usize);
         let buf: &mut [u8] = grant.buf();
+
         // TODO fill the buffer from the USB Endpoint memory
+        for chunk in buf.chunks_mut(8) {
+            chunk[0..4].copy_from_slice(&sample_1);
+            chunk[4..8].copy_from_slice(&sample_2);
+
+            sample_1[1] += 1;
+            sample_2[1] += 1;
+            sample_1[2] += 1;
+            sample_2[2] += 1;
+        }
+
         grant.commit(len);
     }
 
@@ -93,8 +110,12 @@ mod app {
         let i2s_dma_handler::LocalResources { consumer } = cx.local;
         let grant = consumer.read().unwrap();
         let len = grant.len();
+        defmt::info!{"DMA: got grant of {:?} bytes", len};
         let buf = DmaReadBuffer(grant);
-        unsafe { buf.static_read_buffer(); }
+        let (buf_ptr, buf_len): (*const u16, usize) = unsafe { buf.static_read_buffer() };
+        defmt::info!("DMA: starting at {:?} for {:?} transfers", buf_ptr, buf_len);
+        defmt::info!("Samples:");
+        buf.chunks(4).for_each(|x| defmt::info!("  {:#x}", x))
     }
 
     struct DmaReadBuffer<T>(T);
@@ -103,7 +124,8 @@ mod app {
         type Target = [u16];
 
         fn deref(&self) -> &[u16] {
-            unsafe { transmute::<&[u8], &[u16]>(self.0.deref()) }
+            // how is this not unsafe lol
+            cast_slice(self.0.buf())
         }
     }
 

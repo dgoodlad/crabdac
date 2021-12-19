@@ -23,6 +23,7 @@ as-slice = "0.2.1"
 embedded-dma = "0.1.2"
 bbqueue = "0.5.1"
 stable_deref_trait = { version = "1.2.0", default-features = false }
+bytemuck = "1.7.3"
 
 [patch.crates-io]
 # Support isochronous endpoints
