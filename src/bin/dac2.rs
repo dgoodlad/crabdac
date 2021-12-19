@@ -89,7 +89,7 @@ mod app {
     #[task(local = [consumer])]
     fn i2s_dma_handler(cx: i2s_dma_handler::Context) {
         let i2s_dma_handler::LocalResources { consumer } = cx.local;
-        let mut grant = consumer.read().unwrap();
+        let grant = consumer.read().unwrap();
         let len = grant.len();
         let buf = DmaReadBuffer(grant);
         unsafe { buf.static_read_buffer(); }
@@ -100,8 +100,8 @@ mod app {
     impl<'a, const N: usize> core::ops::Deref for DmaReadBuffer<GrantR<'a, N>> {
         type Target = [u8];
 
-        fn deref(&self) -> &Self::Target {
-            self.0.buf()
+        fn deref(&self) -> &[u8] {
+            self.0.deref()
         }
     }
 
