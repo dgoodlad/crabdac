@@ -5,6 +5,8 @@ use crabdac as _;
 
 #[rtic::app(device = stm32f4xx_hal::pac, dispatchers = [SPI3])]
 mod app {
+    use core::intrinsics::transmute;
+
     use bbqueue;
     use bbqueue::GrantR;
     use embedded_dma::ReadBuffer;
@@ -98,10 +100,10 @@ mod app {
     struct DmaReadBuffer<T>(T);
 
     impl<'a, const N: usize> core::ops::Deref for DmaReadBuffer<GrantR<'a, N>> {
-        type Target = [u8];
+        type Target = [u16];
 
-        fn deref(&self) -> &[u8] {
-            self.0.deref()
+        fn deref(&self) -> &[u16] {
+            unsafe { transmute::<&[u8], &[u16]>(self.0.deref()) }
         }
     }
 
