@@ -1,5 +1,6 @@
 use core::{ops::DerefMut, pin::Pin};
 
+use heapless::Deque;
 use usb_device::{class_prelude::*, descriptor::descriptor_type};
 use as_slice::AsMutSlice;
 
@@ -74,7 +75,7 @@ where
             //control_buf: [0; sizes::CONTROL_BUFFER],
             audio_stream_buf,
             overflow_buf: [0; 4],
-            extra_samples: 0,
+            extra_samples: Deque::new(),
         }
     }
 
