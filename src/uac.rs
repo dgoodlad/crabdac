@@ -1,7 +1,7 @@
 use core::{ops::DerefMut, pin::Pin};
 
 use heapless::Deque;
-use usb_device::{class_prelude::*, descriptor::descriptor_type};
+use usb_device::{class_prelude::*, descriptor::descriptor_type, control::Recipient};
 use as_slice::AsMutSlice;
 
 use self::sizes::AUDIO_STREAM_BUFFER;
@@ -40,6 +40,10 @@ pub struct UsbAudioClass<'a, B: UsbBus> {
     //audio_stream_buf: &'a mut [u8],
 }
 
+struct DeviceStrings {
+    interface_alt: StringIndex,
+}
+
 impl<'a, B> UsbAudioClass<'a, B>
 where
     B: UsbBus
@@ -51,6 +55,15 @@ where
 
         defmt::debug!("Allocating audio stream interface");
         let iface_audio_stream = alloc.interface();
+        defmt::debug!("Success");
+
+        defmt::debug!("Allocating audio OUT endpoint");
+        let ep_audio_out = alloc.isochronous(
+                usb_device::endpoint::IsochronousSynchronizationType::Asynchronous,
+                usb_device::endpoint::IsochronousUsageType::Data,
+                sizes::AUDIO_STREAM_BUFFER as u16,
+                0x01
+            );
         defmt::debug!("Success");
 
         defmt::debug!("Allocating audio IN endpoint");
@@ -70,15 +83,6 @@ where
                 // K = 10
                 //
                 // bRefresh value is the exponent, which is 10 - P = 10 - 9 = 1
-                0x01
-            );
-        defmt::debug!("Success");
-
-        defmt::debug!("Allocating audio OUT endpoint");
-        let ep_audio_out = alloc.isochronous(
-                usb_device::endpoint::IsochronousSynchronizationType::Asynchronous,
-                usb_device::endpoint::IsochronousUsageType::Data,
-                sizes::AUDIO_STREAM_BUFFER as u16,
                 0x01
             );
         defmt::debug!("Success");
@@ -122,29 +126,38 @@ impl<B: UsbBus> UsbClass<B> for UsbAudioClass<'_, B> {
             consts::USB_AUDIO_CLASS_SUBCLASS_AUDIOCONTROL,
             0x00
         )?;
-        writer.write(descriptor_type::INTERFACE, &[
+        writer.write(0x24, &[
             0x01, // HEADER
-            0x01, 0x00, // Revision of class specification - 1.0
-            0x00, 0x1E, // Total size of class-specific descriptors
+            0x00, 0x01, // Revision of class specification - 1.0
+            0x27, 0x00, // Total size of class-specific descriptors
             0x01,   // 1 streaming interface
-            0x01,   // AudioStreaming interface 1 belongs to this AudioControl interface
+            //0x01,   // AudioStreaming interface 1 belongs to this AudioControl interface
+            self.iface_audio_stream.into(),   // AudioStreaming interface 1 belongs to this AudioControl interface
         ])?;
-        writer.write(descriptor_type::INTERFACE, &[
+        writer.write(0x24, &[
             0x02, // INPUT_TERMINAL
             0x01, // Terminal ID = 1
             0x01, 0x01, // USB Streaming
             0x00, // No associated terminal
             0x02, // Two channels
-            0b00000000, 0b00000011, // Left Front, Right Front
+            0b00000011, 0b00000000, // Left Front, Right Front
             0x00, // No custom channel names
             0x00, // No text description
         ])?;
-        writer.write(descriptor_type::INTERFACE, &[
-            0x03, // OUTPUT_TERMINAL
-            0x02, // Terminal ID = 2
-            0x03, 0x02, // Headphones
+        writer.write(0x24, &[
+            0x06, // FEATURE UNIT
+            0x02, // STREAMING CONTROL
+            0x01, // Source ID
+            0x01, // Control Size
+            0x01, 0x00, // mute
             0x00, // No associated terminal
-            0x01, // From input terminal
+        ])?;
+        writer.write(0x24, &[
+            0x03, // OUTPUT_TERMINAL
+            0x03, // Terminal ID = 2
+            0x02, 0x03, // Headphones
+            0x00, // No associated terminal
+            0x02, // From input terminal
             0x00, // No text description
         ])?;
         // Audio streaming interface with no endpoints, used when the source isn't sending any data
@@ -163,23 +176,23 @@ impl<B: UsbBus> UsbClass<B> for UsbAudioClass<'_, B> {
             0x00,
             None
         )?;
-        writer.write(descriptor_type::INTERFACE, &[
+        writer.write(0x24, &[
             0x01, // GENERAL
             0x01, // Input terminal 1
             0x01, // 1 frame of delay
-            0x00, 0x01 // PCM Format
+            0x01, 0x00 // PCM Format
         ])?;
-        writer.write(descriptor_type::INTERFACE, &[
+        writer.write(0x24, &[
             0x02, // FORMAT_TYPE subtype
             0x01, // FORMAT_TYPE_I
             0x02, // Two channels
             0x04, // Four bytes per audio subframe
             0x18, // 24 bits per sample
             0x01, // One frequency supported
-            0x01, 0x77, 0x00, // 96_000 Hz
+            0x00, 0x77, 0x01, // 96_000 Hz
         ])?;
         writer.endpoint(&self.ep_audio_stream)?;
-        writer.write(descriptor_type::ENDPOINT, &[
+        writer.write(0x25, &[
             0x01, // TODO EP_GENERAL
             0b00000000, // No control over anything for this endpoint
             0x00, // Lock Delay is unused for asynchronous endpoints
@@ -200,5 +213,31 @@ impl<B: UsbBus> UsbClass<B> for UsbAudioClass<'_, B> {
             //     defmt::debug!("Received {=usize} bytes of audio data", size);
             // });
         }
+    }
+
+    fn control_in(&mut self, xfer: ControlIn<B>) {
+        defmt::debug!("Received control IN");
+    }
+
+    fn control_out(&mut self, xfer: ControlOut<B>) {
+        defmt::debug!("Received control OUT");
+        let request = xfer.request();
+
+        match request.request_type {
+            control::RequestType::Standard => {
+                defmt::debug!("  Standard Request, type {}", request.request);
+                match request.request {
+                    control::Request::SET_INTERFACE => {
+                        defmt::debug!("  SET_INTERFACE {}",  request.value);
+                        xfer.accept().unwrap();
+                    },
+                    _ => {
+                        defmt::debug!("  other request type");
+                    }
+                }
+            },
+            _ => { defmt::debug!("Not handling control OUT"); }
+        }
+        //defmt::debug!("{:?}", request);
     }
 }

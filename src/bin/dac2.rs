@@ -7,6 +7,8 @@ use crabdac as _;
 mod app {
     use core::intrinsics::transmute;
 
+    use usb_device::class::UsbClass;
+
     use bbqueue;
     use bbqueue::GrantR;
     use bytemuck::*;
@@ -34,7 +36,7 @@ mod app {
     use stm32f4xx_hal::gpio::gpioc::PC12;
     use stm32f4xx_hal::i2s;
     use stm32f4xx_hal::i2s::NoMasterClock;
-    use stm32f4xx_hal::{prelude::*, pac, timer::{monotonic::MonoTimer, Timer, monotonic::fugit, monotonic::fugit::ExtU32}};
+    use stm32f4xx_hal::{prelude::*, pac, timer::{monotonic::MonoTimer, Timer}};
 
     use usb_device::prelude::*;
     use usb_device::bus::UsbBusAllocator;
@@ -61,7 +63,7 @@ mod app {
         consumer: bbqueue::framed::FrameConsumer<'static, BUFFER_SIZE>,
         write_grant: Option<bbqueue::framed::FrameGrantW<'static, BUFFER_SIZE>>,
         read_grant: Option<bbqueue::framed::FrameGrantR<'static, BUFFER_SIZE>>,
-        i2s_dma: I2sDmaTransfer,
+        //i2s_dma: I2sDmaTransfer,
         usb_dev: UsbDevice<'static, UsbBusType>,
         usb_audio: UsbAudioClass<'static, UsbBusType>,
     }
@@ -86,6 +88,8 @@ mod app {
             .i2s_apb1_clk(98400.khz())
             .require_pll48clk()
             .freeze();
+
+        defmt::info!("clocks: {}", clocks.pll48clk().unwrap().0);
 
         defmt::info!("init: monotonic timer");
 
@@ -118,46 +122,53 @@ mod app {
             .manufacturer("Crabs Pty Ltd.")
             .product("CrabDAC")
             .serial_number("TEST")
-            .device_class(0xff)
+            // This class/subclass/protocol indicates that there is an Interface
+            // Association Descriptor included in the configuration.
+            .device_class(0xef)
+            .device_sub_class(0x02)
+            .device_protocol(0x01)
             .max_packet_size_0(8)
+            .self_powered(true)
             .max_power(250)
             .build();
 
-        let i2s_periph = I2sPeripheral::new(
-            cx.device.SPI3, (
-                gpioa.pa4.into_alternate(),
-                gpioc.pc10.into_alternate(),
-                gpioc.pc7.into_alternate(),
-                gpioc.pc12.into_alternate(),
-            ),
-            &clocks
-        );
+        defmt::debug!("USB Device created");
 
-        let i2s_clock = i2s_periph.input_clock();
-        defmt::info!("I2S Clock: {}Hz", i2s_clock.0);
+        //let i2s_periph = I2sPeripheral::new(
+        //    cx.device.SPI3, (
+        //        gpioa.pa4.into_alternate(),
+        //        gpioc.pc10.into_alternate(),
+        //        gpioc.pc7.into_alternate(),
+        //        gpioc.pc12.into_alternate(),
+        //    ),
+        //    &clocks
+        //);
 
-        let i2s_config = MasterConfig::with_sample_rate(
-            i2s_clock.0,
-            SAMPLE_RATE,
-            Data24Frame32,
-            FrameFormat::PhilipsI2s,
-            Polarity::IdleHigh,
-            stm32_i2s_v12x::MasterClock::Enable
-        );
+        //let i2s_clock = i2s_periph.input_clock();
+        //defmt::info!("I2S Clock: {}Hz", i2s_clock.0);
 
-        let mut i2s: I2sDevice = stm32_i2s_v12x::I2s::new(i2s_periph)
-            .configure_master_transmit(i2s_config);
-        i2s.set_dma_enabled(true);
+        //let i2s_config = MasterConfig::with_sample_rate(
+        //    i2s_clock.0,
+        //    SAMPLE_RATE,
+        //    Data24Frame32,
+        //    FrameFormat::PhilipsI2s,
+        //    Polarity::IdleHigh,
+        //    stm32_i2s_v12x::MasterClock::Enable
+        //);
 
-        let dma1_streams = StreamsTuple::new(cx.device.DMA1);
-        let dma_config = DmaConfig::default()
-            .double_buffer(false)
-            .fifo_enable(true)
-            .fifo_threshold(stm32f4xx_hal::dma::config::FifoThreshold::HalfFull)
-            .priority(stm32f4xx_hal::dma::config::Priority::VeryHigh)
-            .transfer_complete_interrupt(true);
-        let mut i2s_dma: I2sDmaTransfer =
-            Transfer::init_memory_to_peripheral(dma1_streams.5, i2s, cx.local.zeroes, None, dma_config);
+        //let mut i2s: I2sDevice = stm32_i2s_v12x::I2s::new(i2s_periph)
+        //    .configure_master_transmit(i2s_config);
+        //i2s.set_dma_enabled(true);
+
+        //let dma1_streams = StreamsTuple::new(cx.device.DMA1);
+        //let dma_config = DmaConfig::default()
+        //    .double_buffer(false)
+        //    .fifo_enable(true)
+        //    .fifo_threshold(stm32f4xx_hal::dma::config::FifoThreshold::HalfFull)
+        //    .priority(stm32f4xx_hal::dma::config::Priority::VeryHigh)
+        //    .transfer_complete_interrupt(true);
+        //let mut i2s_dma: I2sDmaTransfer =
+        //    Transfer::init_memory_to_peripheral(dma1_streams.5, i2s, cx.local.zeroes, None, dma_config);
 
         //i2s_dma.start(|i2s| {
         //    defmt::info!("Started I2S DMA stream");
@@ -169,7 +180,7 @@ mod app {
             Local {
                 producer,
                 consumer,
-                i2s_dma,
+                //i2s_dma,
                 read_grant: None,
                 write_grant: None,
                 usb_dev,
@@ -183,23 +194,23 @@ mod app {
     fn idle(cx: idle::Context) -> ! {
         defmt::info!("idle");
 
-        let idle::LocalResources { producer, usb_dev, usb_audio } = cx.local;
+        let idle::LocalResources { producer: _, usb_dev, usb_audio } = cx.local;
 
         loop {
             while usb_dev.poll(&mut [usb_audio]) {
                 defmt::debug!("idle :: usb poll");
-                if usb_audio.audio_data_available {
-                    defmt::debug!("usb_handler :: requesting frame up to {:#x} bytes", MAX_FRAME_SIZE);
-                    let mut grant = match producer.grant(MAX_FRAME_SIZE) {
-                        Ok(grant) => grant,
-                        Err(_) => { defmt::debug!("Dropped USB Frame"); continue; }
-                    };
+                //if usb_audio.audio_data_available {
+                //    defmt::debug!("usb_handler :: requesting frame up to {:#x} bytes", MAX_FRAME_SIZE);
+                //    let mut grant = match producer.grant(MAX_FRAME_SIZE) {
+                //        Ok(grant) => grant,
+                //        Err(_) => { defmt::debug!("Dropped USB Frame"); continue; }
+                //    };
 
-                    let bytes_received = usb_audio.read_audio_stream(&mut grant).unwrap();
-                    grant.commit(bytes_received);
+                //    let bytes_received = usb_audio.read_audio_stream(&mut grant).unwrap();
+                //    grant.commit(bytes_received);
 
-                    defmt::debug!("usb_handler :: committed {:#x} bytes", bytes_received);
-                }
+                //    defmt::debug!("usb_handler :: committed {:#x} bytes", bytes_received);
+                //}
             }
             continue;
         }
@@ -227,30 +238,30 @@ mod app {
     //    }
     //}
 
-    #[task(binds = DMA1_STREAM5, priority = 3, local = [consumer, i2s_dma, read_grant])]
-    fn i2s_dma_handler(cx: i2s_dma_handler::Context) {
-        let i2s_dma_handler::Context { local } = cx;
-        let i2s_dma_handler::LocalResources { consumer, i2s_dma, read_grant } = local;
+    //#[task(binds = DMA1_STREAM5, priority = 3, local = [consumer, i2s_dma, read_grant])]
+    //fn i2s_dma_handler(cx: i2s_dma_handler::Context) {
+    //    let i2s_dma_handler::Context { local } = cx;
+    //    let i2s_dma_handler::LocalResources { consumer, i2s_dma, read_grant } = local;
 
-        defmt::debug!("i2s_dma_handler");
+    //    defmt::debug!("i2s_dma_handler");
 
-        if Stream5::<pac::DMA1>::get_transfer_complete_flag() {
-            defmt::debug!("i2s_dma_handler :: transfer complete");
+    //    if Stream5::<pac::DMA1>::get_transfer_complete_flag() {
+    //        defmt::debug!("i2s_dma_handler :: transfer complete");
 
-            read_grant.take().map(|g| {
-                let len = g.len();
-                defmt::debug!("i2s dma handler :: released {:#x} bytes", len);
-                g.release();
-            });
+    //        read_grant.take().map(|g| {
+    //            let len = g.len();
+    //            defmt::debug!("i2s dma handler :: released {:#x} bytes", len);
+    //            g.release();
+    //        });
 
-            // Get the next chunk of data available from the queue
-            let mut next_grant = consumer.read().unwrap();
+    //        // Get the next chunk of data available from the queue
+    //        let mut next_grant = consumer.read().unwrap();
 
-            defmt::debug!("i2s_dma_handler :: next transfer {:#x} bytes", next_grant.len());
-            i2s_dma.next_transfer(cast_slice(unsafe { transmute::<&[u8], &'static [u8]>(&next_grant) })).unwrap();
-            read_grant.replace(next_grant);
-        }
-    }
+    //        defmt::debug!("i2s_dma_handler :: next transfer {:#x} bytes", next_grant.len());
+    //        i2s_dma.next_transfer(cast_slice(unsafe { transmute::<&[u8], &'static [u8]>(&next_grant) })).unwrap();
+    //        read_grant.replace(next_grant);
+    //    }
+    //}
 
     type I2sPeripheral = i2s::I2s<pac::SPI3, (
         PA4<Alternate<PushPull, 6>>,
