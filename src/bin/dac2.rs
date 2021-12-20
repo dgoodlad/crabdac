@@ -31,18 +31,16 @@ mod app {
     use stm32f4xx_hal::gpio::gpioc::PC12;
     use stm32f4xx_hal::i2s;
     use stm32f4xx_hal::i2s::NoMasterClock;
-    use stm32f4xx_hal::prelude::*;
-    use stm32f4xx_hal::pac;
-    use stm32f4xx_hal::{
-        timer::{monotonic::MonoTimer, Timer, monotonic::fugit, monotonic::fugit::ExtU32},
-    };
+    use stm32f4xx_hal::{prelude::*, pac, timer::{monotonic::MonoTimer, Timer, monotonic::fugit, monotonic::fugit::ExtU32}};
 
     const CHANNELS: u32 = 2;
+    //const SAMPLE_RATE: u32 = 96000;
     const SAMPLE_RATE: u32 = 96000;
     const USB_FRAME_RATE: u32 = 1000;
     const SAMPLE_WORD_SIZE: usize = 4;
     const MAX_FRAME_SIZE: usize = ((SAMPLE_RATE / USB_FRAME_RATE + 1) * CHANNELS) as usize * SAMPLE_WORD_SIZE;
-    const BUFFER_SIZE: usize = MAX_FRAME_SIZE * 3;
+    const FRAME_HEADER_SIZE: usize = 2;
+    const BUFFER_SIZE: usize = (MAX_FRAME_SIZE + FRAME_HEADER_SIZE) * 3;
 
     #[shared]
     struct Shared {
@@ -50,10 +48,10 @@ mod app {
 
     #[local]
     struct Local {
-        producer: bbqueue::Producer<'static, BUFFER_SIZE>,
-        consumer: bbqueue::Consumer<'static, BUFFER_SIZE>,
-        write_grant: Option<bbqueue::GrantW<'static, BUFFER_SIZE>>,
-        read_grant: Option<bbqueue::GrantR<'static, BUFFER_SIZE>>,
+        producer: bbqueue::framed::FrameProducer<'static, BUFFER_SIZE>,
+        consumer: bbqueue::framed::FrameConsumer<'static, BUFFER_SIZE>,
+        write_grant: Option<bbqueue::framed::FrameGrantW<'static, BUFFER_SIZE>>,
+        read_grant: Option<bbqueue::framed::FrameGrantR<'static, BUFFER_SIZE>>,
         i2s_dma: I2sDmaTransfer,
     }
 
@@ -80,7 +78,7 @@ mod app {
 
         let mono = Timer::new(cx.device.TIM5, &clocks).monotonic();
 
-        let (producer, consumer) = cx.local.audio_queue.try_split().unwrap();
+        let (producer, consumer) = cx.local.audio_queue.try_split_framed().unwrap();
 
         let gpioa = cx.device.GPIOA.split();
         let gpioc = cx.device.GPIOC.split();
@@ -124,7 +122,8 @@ mod app {
         i2s_dma.start(|i2s| {
             defmt::info!("Started I2S DMA stream");
             i2s.enable();
-            usb_handler::spawn_after(1.millis()).ok();
+            //usb_handler::spawn_after(1.millis()).ok();
+            usb_handler::spawn().ok();
         });
 
         //i2s_dma_handler::spawn().ok();
@@ -156,16 +155,21 @@ mod app {
         let mut sample_1: [u8; 4] = [0x00, 0x02, 0x04, 0x06];
         let mut sample_2: [u8; 4] = [0x01, 0x03, 0x05, 0x07];
 
+        usb_handler::spawn_after(1.millis()).unwrap();
+
         defmt::debug!("usb_handler");
+        defmt::debug!("usb_handler :: requesting frame up to {:#x} bytes", MAX_FRAME_SIZE);
 
         let usb_handler::LocalResources { producer } = cx.local;
-        let mut grant = producer.grant_exact(MAX_FRAME_SIZE).unwrap();
+        let mut grant = match producer.grant(MAX_FRAME_SIZE) {
+            Ok(grant) => grant,
+            Err(_) => { defmt::debug!("Dropped USB Frame"); return; }
+        };
 
-        let len = MAX_FRAME_SIZE - (SAMPLE_WORD_SIZE * CHANNELS as usize);
-        let buf: &mut [u8] = grant.buf();
+        let len = MAX_FRAME_SIZE; //MAX_FRAME_SIZE - (SAMPLE_WORD_SIZE * CHANNELS as usize);
 
         // TODO fill the buffer from the USB Endpoint memory
-        for chunk in buf[0..len].chunks_mut(8) {
+        for chunk in grant[0..len].chunks_mut(8) {
             chunk[0..4].copy_from_slice(&sample_1);
             chunk[4..8].copy_from_slice(&sample_2);
 
@@ -178,8 +182,6 @@ mod app {
         grant.commit(len);
 
         defmt::debug!("usb_handler :: committed {:#x} bytes", len);
-
-        usb_handler::spawn_after(1.millis()).unwrap();
     }
 
     #[task(binds = DMA1_STREAM5, priority = 3, local = [consumer, i2s_dma, read_grant])]
@@ -195,16 +197,14 @@ mod app {
             read_grant.take().map(|g| {
                 let len = g.len();
                 defmt::debug!("i2s dma handler :: released {:#x} bytes", len);
-                g.release(len);
+                g.release();
             });
 
             // Get the next chunk of data available from the queue
             let mut next_grant = consumer.read().unwrap();
-            // Ensure that the queue gets this chunk back once we're done with it
-            next_grant.to_release(next_grant.len());
 
             defmt::debug!("i2s_dma_handler :: next transfer {:#x} bytes", next_grant.len());
-            i2s_dma.next_transfer(cast_slice(unsafe { next_grant.as_static_buf() })).unwrap();
+            i2s_dma.next_transfer(cast_slice(unsafe { transmute::<&[u8], &'static [u8]>(&next_grant) })).unwrap();
             read_grant.replace(next_grant);
         }
     }
