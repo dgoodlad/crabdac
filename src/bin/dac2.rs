@@ -12,6 +12,8 @@ mod app {
     use bytemuck::*;
     use crabdac::uac::UsbAudioClass;
     use embedded_dma::StaticReadBuffer;
+    use hal::gpio::Input;
+    use hal::hal::digital::v2::IoPin;
     use stable_deref_trait::StableDeref;
     use stm32_i2s_v12x::MasterConfig;
     use stm32_i2s_v12x::Polarity;
@@ -38,7 +40,7 @@ mod app {
     use usb_device::bus::UsbBusAllocator;
 
     use stm32f4xx_hal as hal;
-    use hal::otg_fs::{USB, UsbBus, UsbBusType};
+    use hal::otg_hs::{USB, UsbBus, UsbBusType};
 
     const CHANNELS: u32 = 2;
     //const SAMPLE_RATE: u32 = 96000;
@@ -92,14 +94,17 @@ mod app {
         let (producer, consumer) = cx.local.audio_queue.try_split_framed().unwrap();
 
         let gpioa = cx.device.GPIOA.split();
+        let gpiob = cx.device.GPIOB.split();
         let gpioc = cx.device.GPIOC.split();
 
+        let pb13: hal::gpio::Pin<Input<hal::gpio::Floating>, 'B', 13> = gpiob.pb13.into_floating_input();
+
         let usb = USB {
-            usb_global: cx.device.OTG_FS_GLOBAL,
-            usb_device: cx.device.OTG_FS_DEVICE,
-            usb_pwrclk: cx.device.OTG_FS_PWRCLK,
-            pin_dm: gpioa.pa11.into_alternate(),
-            pin_dp: gpioa.pa12.into_alternate(),
+            usb_global: cx.device.OTG_HS_GLOBAL,
+            usb_device: cx.device.OTG_HS_DEVICE,
+            usb_pwrclk: cx.device.OTG_HS_PWRCLK,
+            pin_dm: gpiob.pb14.into_alternate(),
+            pin_dp: gpiob.pb15.into_alternate(),
             hclk: clocks.hclk(),
         };
 
@@ -154,10 +159,10 @@ mod app {
         let mut i2s_dma: I2sDmaTransfer =
             Transfer::init_memory_to_peripheral(dma1_streams.5, i2s, cx.local.zeroes, None, dma_config);
 
-        i2s_dma.start(|i2s| {
-            defmt::info!("Started I2S DMA stream");
-            i2s.enable();
-        });
+        //i2s_dma.start(|i2s| {
+        //    defmt::info!("Started I2S DMA stream");
+        //    i2s.enable();
+        //});
 
         (
             Shared {},
@@ -174,36 +179,53 @@ mod app {
         )
     }
 
-    #[idle]
-    fn idle(_: idle::Context) -> ! {
+    #[idle(local = [producer, usb_dev, usb_audio])]
+    fn idle(cx: idle::Context) -> ! {
         defmt::info!("idle");
 
+        let idle::LocalResources { producer, usb_dev, usb_audio } = cx.local;
+
         loop {
+            while usb_dev.poll(&mut [usb_audio]) {
+                defmt::debug!("idle :: usb poll");
+                if usb_audio.audio_data_available {
+                    defmt::debug!("usb_handler :: requesting frame up to {:#x} bytes", MAX_FRAME_SIZE);
+                    let mut grant = match producer.grant(MAX_FRAME_SIZE) {
+                        Ok(grant) => grant,
+                        Err(_) => { defmt::debug!("Dropped USB Frame"); continue; }
+                    };
+
+                    let bytes_received = usb_audio.read_audio_stream(&mut grant).unwrap();
+                    grant.commit(bytes_received);
+
+                    defmt::debug!("usb_handler :: committed {:#x} bytes", bytes_received);
+                }
+            }
             continue;
         }
     }
 
-    #[task(binds = OTG_FS, local = [producer, usb_dev, usb_audio])]
-    fn usb_handler(cx: usb_handler::Context) {
-        defmt::debug!("usb_handler");
+    //#[task(binds = OTG_FS, local = [producer, usb_dev, usb_audio])]
+    //fn usb_handler(cx: usb_handler::Context) {
+    //    defmt::debug!("usb_handler");
 
-        let usb_handler::LocalResources { producer, usb_dev, usb_audio } = cx.local;
+    //    let usb_handler::LocalResources { producer, usb_dev, usb_audio } = cx.local;
 
-        while usb_dev.poll(&mut [usb_audio]) {
-            if usb_audio.audio_data_available {
-                defmt::debug!("usb_handler :: requesting frame up to {:#x} bytes", MAX_FRAME_SIZE);
-                let mut grant = match producer.grant(MAX_FRAME_SIZE) {
-                    Ok(grant) => grant,
-                    Err(_) => { defmt::debug!("Dropped USB Frame"); return; }
-                };
+    //    while usb_dev.poll(&mut [usb_audio]) {
+    //        if usb_audio.audio_data_available {
+    //            defmt::debug!("usb_handler :: requesting frame up to {:#x} bytes", MAX_FRAME_SIZE);
+    //            let mut grant = match producer.grant(MAX_FRAME_SIZE) {
+    //                Ok(grant) => grant,
+    //                Err(_) => { defmt::debug!("Dropped USB Frame"); return; }
+    //            };
 
-                let bytes_received = usb_audio.read_audio_stream(&mut grant).unwrap();
-                grant.commit(bytes_received);
+    //            let bytes_received = usb_audio.read_audio_stream(&mut grant).unwrap();
+    //            grant.commit(bytes_received);
 
-                defmt::debug!("usb_handler :: committed {:#x} bytes", bytes_received);
-            }
-        }
-    }
+    //            defmt::debug!("usb_handler :: committed {:#x} bytes", bytes_received);
+    //        }
+    //    }
+    //}
 
     #[task(binds = DMA1_STREAM5, priority = 3, local = [consumer, i2s_dma, read_grant])]
     fn i2s_dma_handler(cx: i2s_dma_handler::Context) {
