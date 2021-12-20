@@ -65,7 +65,7 @@ mod app {
         *cx.local.usb_bus = Some(UsbBus::new(usb, cx.local.ep_memory));
         let usb_bus = cx.local.usb_bus.as_ref().unwrap();
 
-        let usb_audio = UsbAudioClass::new(usb_bus, cx.local.usb_audio_stream_buf);
+        let usb_audio = UsbAudioClass::new(usb_bus);
 
         let usb_dev = UsbDeviceBuilder::new(usb_bus, UsbVidPid(0x1209, 0x0001))
             .manufacturer("Crabs Pty Ltd.")

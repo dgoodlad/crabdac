@@ -34,27 +34,27 @@ pub struct UsbAudioClass<'a, B: UsbBus> {
     iface_audio_stream: InterfaceNumber,
     ep_audio_stream: EndpointOut<'a, B>,
     ep_audio_stream_fb: EndpointIn<'a, B>,
+
+    pub audio_data_available: bool,
     //control_buf: [u8; sizes::CONTROL_BUFFER],
-    audio_stream_buf: &'a mut [u8],
-    overflow_buf: [u32; 4],
-    extra_samples: heapless::Deque<u8, {(2 * BYTES_PER_SAMPLE * CHANNELS) as usize}>,
+    //audio_stream_buf: &'a mut [u8],
 }
 
 impl<'a, B> UsbAudioClass<'a, B>
 where
     B: UsbBus
 {
-    pub fn new(alloc: &'a UsbBusAllocator<B>, audio_stream_buf: &'a mut [u8]) -> UsbAudioClass<'a, B> {
-        Self {
-            iface_audio_control: alloc.interface(),
-            iface_audio_stream: alloc.interface(),
-            ep_audio_stream: alloc.isochronous(
-                usb_device::endpoint::IsochronousSynchronizationType::Asynchronous,
-                usb_device::endpoint::IsochronousUsageType::Data,
-                sizes::AUDIO_STREAM_BUFFER as u16,
-                0x01
-            ),
-            ep_audio_stream_fb: alloc.isochronous(
+    pub fn new(alloc: &'a UsbBusAllocator<B>) -> UsbAudioClass<'a, B> {
+        defmt::debug!("Allocating audio control interface");
+        let iface_audio_control = alloc.interface();
+        defmt::debug!("Success");
+
+        defmt::debug!("Allocating audio stream interface");
+        let iface_audio_stream = alloc.interface();
+        defmt::debug!("Success");
+
+        defmt::debug!("Allocating audio IN endpoint");
+        let ep_audio_fb_in = alloc.isochronous(
                 usb_device::endpoint::IsochronousSynchronizationType::NoSynchronization,
                 usb_device::endpoint::IsochronousUsageType::Feedback,
                 // Per the UAC1.0 spec, audio feedback packets are 3 bytes long
@@ -71,25 +71,33 @@ where
                 //
                 // bRefresh value is the exponent, which is 10 - P = 10 - 9 = 1
                 0x01
-            ),
+            );
+        defmt::debug!("Success");
+
+        defmt::debug!("Allocating audio OUT endpoint");
+        let ep_audio_out = alloc.isochronous(
+                usb_device::endpoint::IsochronousSynchronizationType::Asynchronous,
+                usb_device::endpoint::IsochronousUsageType::Data,
+                sizes::AUDIO_STREAM_BUFFER as u16,
+                0x01
+            );
+        defmt::debug!("Success");
+
+        Self {
+            iface_audio_control,
+            iface_audio_stream,
+            ep_audio_stream: ep_audio_out,
+            ep_audio_stream_fb: ep_audio_fb_in,
             //control_buf: [0; sizes::CONTROL_BUFFER],
-            audio_stream_buf,
-            overflow_buf: [0; 4],
-            extra_samples: Deque::new(),
+            audio_data_available: false,
         }
     }
 
-    fn read_audio_stream(mut self, buffer: &mut [u8; AUDIO_STREAM_BUFFER]) -> Result<usize, UsbError>
+    pub fn read_audio_stream(&self, buffer: &mut [u8]) -> Result<usize, UsbError>
     {
+        assert!(buffer.len() >= sizes::AUDIO_STREAM_BUFFER);
+        assert!(self.audio_data_available);
         self.ep_audio_stream.read(buffer.as_mut_slice()).map(|bytes_received| {
-            let samples_received = bytes_received as u32 / BYTES_PER_SAMPLE / CHANNELS;
-            let extra_samples = samples_received - EXPECTED_SAMPLES_PER_FRAME;
-            if extra_samples > 0 {
-                let (expected, extra) = buffer.split_at(buffer.len() - (extra_samples * BYTES_PER_SAMPLE * CHANNELS) as usize);
-                for x in extra.iter() {
-                    self.extra_samples.push_back(*x);
-                }
-            }
             bytes_received
         })
     }
@@ -185,11 +193,12 @@ impl<B: UsbBus> UsbClass<B> for UsbAudioClass<'_, B> {
     fn endpoint_out(&mut self, addr: EndpointAddress) {
         if addr == self.ep_audio_stream.address() {
             defmt::debug!("Received audio stream packet");
-            self.ep_audio_stream.read(&mut self.audio_stream_buf).map_or_else(|err| {
-                defmt::warn!("Error in audio stream packet read");
-            }, |size| {
-                defmt::debug!("Received {=usize} bytes of audio data", size);
-            });
+            self.audio_data_available = true;
+            // self.ep_audio_stream.read(&mut self.audio_stream_buf).map_or_else(|err| {
+            //     defmt::warn!("Error in audio stream packet read");
+            // }, |size| {
+            //     defmt::debug!("Received {=usize} bytes of audio data", size);
+            // });
         }
     }
 }
