@@ -3,7 +3,7 @@
 
 use crabdac as _;
 
-#[rtic::app(device = stm32f4xx_hal::pac, dispatchers = [SPI3])]
+#[rtic::app(device = stm32f4xx_hal::pac, dispatchers = [SPI2])]
 mod app {
     use core::intrinsics::transmute;
 
@@ -12,10 +12,29 @@ mod app {
     use bytemuck::*;
     use embedded_dma::StaticReadBuffer;
     use stable_deref_trait::StableDeref;
+    use stm32_i2s_v12x::MasterConfig;
+    use stm32_i2s_v12x::Polarity;
+    use stm32_i2s_v12x::TransmitMode;
+    use stm32_i2s_v12x::format::Data24Frame32;
+    use stm32_i2s_v12x::format::FrameFormat;
+    use stm32f4xx_hal::dma::traits::StreamISR;
+    use stm32f4xx_hal::dma::MemoryToPeripheral;
+    use stm32f4xx_hal::dma::Stream5;
+    use stm32f4xx_hal::dma::StreamsTuple;
+    use stm32f4xx_hal::dma::Transfer;
+    use stm32f4xx_hal::dma::config::DmaConfig;
+    use stm32f4xx_hal::gpio::Alternate;
+    use stm32f4xx_hal::gpio::PushPull;
+    use stm32f4xx_hal::gpio::gpioa::PA4;
+    use stm32f4xx_hal::gpio::gpioc::PC7;
+    use stm32f4xx_hal::gpio::gpioc::PC10;
+    use stm32f4xx_hal::gpio::gpioc::PC12;
+    use stm32f4xx_hal::i2s;
+    use stm32f4xx_hal::i2s::NoMasterClock;
     use stm32f4xx_hal::prelude::*;
     use stm32f4xx_hal::pac;
     use stm32f4xx_hal::{
-        timer::{monotonic::MonoTimer, Timer},
+        timer::{monotonic::MonoTimer, Timer, monotonic::fugit, monotonic::fugit::ExtU32},
     };
 
     const CHANNELS: u32 = 2;
@@ -23,7 +42,7 @@ mod app {
     const USB_FRAME_RATE: u32 = 1000;
     const SAMPLE_WORD_SIZE: usize = 4;
     const MAX_FRAME_SIZE: usize = ((SAMPLE_RATE / USB_FRAME_RATE + 1) * CHANNELS) as usize * SAMPLE_WORD_SIZE;
-    const BUFFER_SIZE: usize = MAX_FRAME_SIZE * 2;
+    const BUFFER_SIZE: usize = MAX_FRAME_SIZE * 3;
 
     #[shared]
     struct Shared {
@@ -33,12 +52,17 @@ mod app {
     struct Local {
         producer: bbqueue::Producer<'static, BUFFER_SIZE>,
         consumer: bbqueue::Consumer<'static, BUFFER_SIZE>,
+        write_grant: Option<bbqueue::GrantW<'static, BUFFER_SIZE>>,
+        read_grant: Option<bbqueue::GrantR<'static, BUFFER_SIZE>>,
+        i2s_dma: I2sDmaTransfer,
     }
 
     #[monotonic(binds = TIM5, default = true)]
     type MicrosecMono = MonoTimer<pac::TIM5, 1_000_000>;
 
-    #[init(local = [audio_queue: bbqueue::BBBuffer<BUFFER_SIZE> = bbqueue::BBBuffer::new()])]
+    #[init(local = [audio_queue: bbqueue::BBBuffer<BUFFER_SIZE> = bbqueue::BBBuffer::new(),
+                    zeroes: [u16; 768] = [0; 768],
+    ])]
     fn init(cx: init::Context) -> (Shared, Local, init::Monotonics) {
         defmt::info!("init: clocks");
 
@@ -48,7 +72,7 @@ mod app {
             .sysclk(180.mhz())
             .pclk1(45.mhz())
             .pclk2(90.mhz())
-            .i2s_apb1_clk(24571.khz())
+            .i2s_apb1_clk(98400.khz())
             .require_pll48clk()
             .freeze();
 
@@ -58,14 +82,61 @@ mod app {
 
         let (producer, consumer) = cx.local.audio_queue.try_split().unwrap();
 
-        usb_handler::spawn().ok();
-        i2s_dma_handler::spawn().ok();
+        let gpioa = cx.device.GPIOA.split();
+        let gpioc = cx.device.GPIOC.split();
+
+        let i2s_periph = I2sPeripheral::new(
+            cx.device.SPI3, (
+                gpioa.pa4.into_alternate(),
+                gpioc.pc10.into_alternate(),
+                gpioc.pc7.into_alternate(),
+                gpioc.pc12.into_alternate(),
+            ),
+            &clocks
+        );
+
+        let i2s_clock = i2s_periph.input_clock();
+        defmt::info!("I2S Clock: {}Hz", i2s_clock.0);
+
+        let i2s_config = MasterConfig::with_sample_rate(
+            i2s_clock.0,
+            SAMPLE_RATE,
+            Data24Frame32,
+            FrameFormat::PhilipsI2s,
+            Polarity::IdleHigh,
+            stm32_i2s_v12x::MasterClock::Enable
+        );
+
+        let mut i2s: I2sDevice = stm32_i2s_v12x::I2s::new(i2s_periph)
+            .configure_master_transmit(i2s_config);
+        i2s.set_dma_enabled(true);
+
+        let dma1_streams = StreamsTuple::new(cx.device.DMA1);
+        let dma_config = DmaConfig::default()
+            .double_buffer(false)
+            .fifo_enable(true)
+            .fifo_threshold(stm32f4xx_hal::dma::config::FifoThreshold::HalfFull)
+            .priority(stm32f4xx_hal::dma::config::Priority::VeryHigh)
+            .transfer_complete_interrupt(true);
+        let mut i2s_dma: I2sDmaTransfer =
+            Transfer::init_memory_to_peripheral(dma1_streams.5, i2s, cx.local.zeroes, None, dma_config);
+
+        i2s_dma.start(|i2s| {
+            defmt::info!("Started I2S DMA stream");
+            i2s.enable();
+            usb_handler::spawn_after(1.millis()).ok();
+        });
+
+        //i2s_dma_handler::spawn().ok();
 
         (
             Shared {},
             Local {
                 producer,
                 consumer,
+                i2s_dma,
+                read_grant: None,
+                write_grant: None,
             },
             init::Monotonics(mono),
         )
@@ -85,6 +156,8 @@ mod app {
         let mut sample_1: [u8; 4] = [0x00, 0x02, 0x04, 0x06];
         let mut sample_2: [u8; 4] = [0x01, 0x03, 0x05, 0x07];
 
+        defmt::debug!("usb_handler");
+
         let usb_handler::LocalResources { producer } = cx.local;
         let mut grant = producer.grant_exact(MAX_FRAME_SIZE).unwrap();
 
@@ -92,7 +165,7 @@ mod app {
         let buf: &mut [u8] = grant.buf();
 
         // TODO fill the buffer from the USB Endpoint memory
-        for chunk in buf.chunks_mut(8) {
+        for chunk in buf[0..len].chunks_mut(8) {
             chunk[0..4].copy_from_slice(&sample_1);
             chunk[4..8].copy_from_slice(&sample_2);
 
@@ -103,31 +176,45 @@ mod app {
         }
 
         grant.commit(len);
+
+        defmt::debug!("usb_handler :: committed {:#x} bytes", len);
+
+        usb_handler::spawn_after(1.millis()).unwrap();
     }
 
-    #[task(local = [consumer])]
+    #[task(binds = DMA1_STREAM5, priority = 3, local = [consumer, i2s_dma, read_grant])]
     fn i2s_dma_handler(cx: i2s_dma_handler::Context) {
-        let i2s_dma_handler::LocalResources { consumer } = cx.local;
-        let grant = consumer.read().unwrap();
-        let len = grant.len();
-        defmt::info!{"DMA: got grant of {:?} bytes", len};
-        let buf = DmaReadBuffer(grant);
-        let (buf_ptr, buf_len): (*const u16, usize) = unsafe { buf.static_read_buffer() };
-        defmt::info!("DMA: starting at {:?} for {:?} transfers", buf_ptr, buf_len);
-        defmt::info!("Samples:");
-        buf.chunks(4).for_each(|x| defmt::info!("  {:#x}", x))
-    }
+        let i2s_dma_handler::Context { local } = cx;
+        let i2s_dma_handler::LocalResources { consumer, i2s_dma, read_grant } = local;
 
-    struct DmaReadBuffer<T>(T);
+        defmt::debug!("i2s_dma_handler");
 
-    impl<'a, const N: usize> core::ops::Deref for DmaReadBuffer<GrantR<'a, N>> {
-        type Target = [u16];
+        if Stream5::<pac::DMA1>::get_transfer_complete_flag() {
+            defmt::debug!("i2s_dma_handler :: transfer complete");
 
-        fn deref(&self) -> &[u16] {
-            // how is this not unsafe lol
-            cast_slice(self.0.buf())
+            read_grant.take().map(|g| {
+                let len = g.len();
+                defmt::debug!("i2s dma handler :: released {:#x} bytes", len);
+                g.release(len);
+            });
+
+            // Get the next chunk of data available from the queue
+            let mut next_grant = consumer.read().unwrap();
+            // Ensure that the queue gets this chunk back once we're done with it
+            next_grant.to_release(next_grant.len());
+
+            defmt::debug!("i2s_dma_handler :: next transfer {:#x} bytes", next_grant.len());
+            i2s_dma.next_transfer(cast_slice(unsafe { next_grant.as_static_buf() })).unwrap();
+            read_grant.replace(next_grant);
         }
     }
 
-    unsafe impl<'a, const N: usize> StableDeref for DmaReadBuffer<GrantR<'a, N>> {}
+    type I2sPeripheral = i2s::I2s<pac::SPI3, (
+        PA4<Alternate<PushPull, 6>>,
+        PC10<Alternate<PushPull, 6>>,
+        PC7<Alternate<PushPull, 6>>,
+        PC12<Alternate<PushPull, 6>>,
+    )>;
+    type I2sDevice = stm32_i2s_v12x::I2s<I2sPeripheral, TransmitMode<Data24Frame32>>;
+    type I2sDmaTransfer = Transfer<Stream5<pac::DMA1>, I2sDevice, MemoryToPeripheral, &'static [u16], 0>;
 }
