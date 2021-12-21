@@ -29,6 +29,13 @@ mod consts {
     pub const USB_AUDIO_CLASS_SUBCLASS_MIDISTREAMING: u8 = 0x03;
 }
 
+#[repr(u8)]
+#[derive(PartialEq)]
+pub enum StreamingState {
+    Enabled,
+    Disabled,
+}
+
 pub struct UsbAudioClass<'a, B: UsbBus> {
     iface_audio_control: InterfaceNumber,
     iface_audio_stream: InterfaceNumber,
@@ -36,6 +43,7 @@ pub struct UsbAudioClass<'a, B: UsbBus> {
     ep_audio_stream_fb: EndpointIn<'a, B>,
 
     pub audio_data_available: bool,
+    pub enable_disable: Option<StreamingState>,
     //control_buf: [u8; sizes::CONTROL_BUFFER],
     //audio_stream_buf: &'a mut [u8],
 }
@@ -94,16 +102,32 @@ where
             ep_audio_stream_fb: ep_audio_fb_in,
             //control_buf: [0; sizes::CONTROL_BUFFER],
             audio_data_available: false,
+            enable_disable: None,
         }
     }
 
-    pub fn read_audio_stream(&self, buffer: &mut [u8]) -> Result<usize, UsbError>
+    pub fn read_audio_stream(&mut self, buffer: &mut [u8]) -> Result<usize, UsbError>
     {
         assert!(buffer.len() >= sizes::AUDIO_STREAM_BUFFER);
         assert!(self.audio_data_available);
         self.ep_audio_stream.read(buffer.as_mut_slice()).map(|bytes_received| {
+            self.audio_data_available = false;
             bytes_received
         })
+    }
+
+    fn enable_stream(&mut self) {
+        defmt::info!("Enabling audio stream");
+        self.enable_disable.replace(StreamingState::Enabled);
+    }
+
+    fn disable_stream(&mut self) {
+        defmt::info!("Disabling audio stream");
+        self.enable_disable.replace(StreamingState::Disabled);
+    }
+
+    fn clear_enable_disable(&mut self) {
+        self.enable_disable.take().unwrap();
     }
 }
 
@@ -205,7 +229,7 @@ impl<B: UsbBus> UsbClass<B> for UsbAudioClass<'_, B> {
 
     fn endpoint_out(&mut self, addr: EndpointAddress) {
         if addr == self.ep_audio_stream.address() {
-            defmt::debug!("Received audio stream packet");
+            defmt::trace!("Received audio stream packet");
             self.audio_data_available = true;
             // self.ep_audio_stream.read(&mut self.audio_stream_buf).map_or_else(|err| {
             //     defmt::warn!("Error in audio stream packet read");
@@ -216,28 +240,81 @@ impl<B: UsbBus> UsbClass<B> for UsbAudioClass<'_, B> {
     }
 
     fn control_in(&mut self, xfer: ControlIn<B>) {
-        defmt::debug!("Received control IN");
-    }
-
-    fn control_out(&mut self, xfer: ControlOut<B>) {
-        defmt::debug!("Received control OUT");
         let request = xfer.request();
 
         match request.request_type {
+            control::RequestType::Vendor |
+            control::RequestType::Reserved => { return; },
+
             control::RequestType::Standard => {
-                defmt::debug!("  Standard Request, type {}", request.request);
+                defmt::debug!("Control IN Standard Request");
+
                 match request.request {
-                    control::Request::SET_INTERFACE => {
-                        defmt::debug!("  SET_INTERFACE {}",  request.value);
-                        xfer.accept().unwrap();
+                    control::Request::GET_INTERFACE => {
+                        defmt::debug!("GET_INTERFACE iface{}", request.index);
+                        if request.index as u8 == self.iface_audio_stream.into() {
+                            xfer.accept_with(&[0_u8]).unwrap();
+                        }
                     },
-                    _ => {
-                        defmt::debug!("  other request type");
-                    }
+                    _ => { return; }
                 }
             },
-            _ => { defmt::debug!("Not handling control OUT"); }
+
+            control::RequestType::Class => {
+                match request.request {
+                    0b00100001 => {
+                        // Audio Control Request - CUR - Interface Entity
+                        // Likely MUTE
+                        defmt::debug!("Control IN - Audio Control - CUR - Entity - {:#x} {:#x}", request.index, request.value);
+                        if request.index == 0x02 && ((request.value & 0xff00) >> 8) == 0x00 {
+                            // entity id 0x02 is our feature unit
+                            // CS (high byte of value) is control number 0, which is mute
+                            // TODO for now mute is always off
+                            xfer.accept_with(&[0_u8]).unwrap();
+                        } else {
+                            xfer.reject().unwrap();
+                        }
+                    },
+                    0b00100010 => {
+                        // Audio Control Request - CUR - Endpoint
+                        defmt::debug!("Control IN - Audio Control - CUR - Endpoint - {:#x} {:#x}", request.index, request.value);
+                        xfer.reject().unwrap();
+                    },
+                    _ => { xfer.reject().unwrap(); }
+                }
+            }
         }
-        //defmt::debug!("{:?}", request);
+    }
+
+    fn control_out(&mut self, xfer: ControlOut<B>) {
+        let request = xfer.request();
+
+        match request.request_type {
+            control::RequestType::Vendor |
+            control::RequestType::Reserved => { return; },
+
+            control::RequestType::Standard => {
+                match request.request {
+                    control::Request::SET_INTERFACE => {
+                        defmt::debug!("SET_INTERFACE iface{}->{}", request.index, request.value);
+                        if request.index as u8 == self.iface_audio_stream.into() {
+                            match request.value {
+                                0 => xfer.accept().map(|_| self.disable_stream()).unwrap(),
+                                1 => xfer.accept().map(|_| self.enable_stream()).unwrap(),
+                                // We only have 0/1 alternate interfaces for the
+                                // audio stream, so any other value is invalid
+                                _ => { xfer.reject().unwrap(); },
+                            }
+                        }
+                    },
+                    _ => {},
+                }
+            },
+
+            control::RequestType::Class => {
+                defmt::debug!("Class-specific request: {} {} {}", request.request, request.index, request.value);
+            }
+
+        }
     }
 }
