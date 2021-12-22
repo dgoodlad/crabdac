@@ -72,6 +72,7 @@ mod app {
         usb_audio: UsbAudioClass<'static, UsbBusType>,
         dma1_stream_5: Option<StreamX<pac::DMA1, 5>>,
         i2s: Option<I2sDevice>,
+        feedback_timer: UsbAudioFrequencyFeedback<pac::TIM2, PB8<Alternate<PushPull, 1>>>,
     }
 
     #[monotonic(binds = TIM5, default = true)]
@@ -115,7 +116,19 @@ mod app {
         let gpiob = cx.device.GPIOB.split();
         let gpioc = cx.device.GPIOC.split();
 
+        // OTG_VBUS_SENSE
         let pb13: hal::gpio::Pin<Input<hal::gpio::Floating>, 'B', 13> = gpiob.pb13.into_floating_input();
+
+        // OTG_FS_SOF
+        let pa4: PA4<Alternate<PushPull, 12>> = gpioa.pa4.into_alternate();
+
+        // TIM2_ETR
+        let pb8: PB8<Alternate<PushPull, 1>> = gpiob.pb8.into_alternate();
+
+        let feedback_timer: UsbAudioFrequencyFeedback<pac::TIM2, PB8<Alternate<PushPull, 1>>> =
+            UsbAudioFrequencyFeedback::new(cx.device.TIM2, CaptureChannel::Channel2, pb8);
+        feedback_timer.start();
+
 
         let usb = USB {
             usb_global: cx.device.OTG_HS_GLOBAL,
@@ -150,7 +163,7 @@ mod app {
 
         let i2s_periph = I2sPeripheral::new(
             cx.device.SPI3, (
-                gpioa.pa4.into_alternate(),
+                gpioa.pa15.into_alternate(),
                 gpioc.pc10.into_alternate(),
                 gpioc.pc7.into_alternate(),
                 gpioc.pc12.into_alternate(),
@@ -189,6 +202,7 @@ mod app {
                 usb_audio,
                 dma1_stream_5: Some(dma1_streams.5),
                 i2s: Some(i2s),
+                feedback_timer,
             },
             init::Monotonics(mono),
         )
@@ -262,6 +276,12 @@ mod app {
 
                 defmt::trace!("usb_handler :: committed {:#x} bytes", bytes_received);
             }
+
+            //match usb_audio.write_audio_feedback(&[0x60, 0x00, 0x00]) {
+            //    Ok(bytes) => defmt::info!("Wrote {} bytes of feedback", bytes),
+            //    Err(_) => defmt::info!("Error writing feedback"),
+            //}
+
             usb_audio.enable_disable.take().map(|b| {
                 match toggle_i2s_dma::spawn(b) {
                     Ok(_) => defmt::info!("Toggled I2S DMA"),
@@ -333,8 +353,18 @@ mod app {
         }
     }
 
+    #[task(binds = TIM2, local = [feedback_timer])]
+    fn tim2(cx: tim2::Context) {
+        defmt::debug!("TIM2 interrupt");
+        let count = cx.local.feedback_timer.get_count();
+        match count {
+            None => defmt::info!("TIM2 interrupt but no TIR"),
+            Some(i) => if i > 0 { defmt::info!("TIM2 count {}", i) },
+        }
+    }
+
     type I2sPeripheral = i2s::I2s<pac::SPI3, (
-        PA4<Alternate<PushPull, 6>>,
+        PA15<Alternate<PushPull, 6>>,
         PC10<Alternate<PushPull, 6>>,
         PC7<Alternate<PushPull, 6>>,
         PC12<Alternate<PushPull, 6>>,
