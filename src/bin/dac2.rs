@@ -89,13 +89,21 @@ mod app {
         let clocks = rcc.cfgr
             .use_hse(8.mhz())
             .sysclk(180.mhz())
+            .hclk(180.mhz())
             .pclk1(45.mhz())
             .pclk2(90.mhz())
             .i2s_apb1_clk(98400.khz())
             .require_pll48clk()
             .freeze();
 
-        defmt::info!("clocks: {}", clocks.pll48clk().unwrap().0);
+        assert!(clocks.is_pll48clk_valid());
+
+        defmt::info!("clocks.hclk: {}", clocks.hclk().0);
+        defmt::info!("clocks.pclk1: {}", clocks.pclk1().0);
+        defmt::info!("clocks.pclk2: {}", clocks.pclk2().0);
+        defmt::info!("clocks.pll48clk: {}", clocks.pll48clk().unwrap().0);
+        defmt::info!("clocks.i2s_apb1_clk: {}", clocks.i2s_apb1_clk().unwrap().0);
+        defmt::info!("TIM2 clock: {}", pac::TIM2::timer_clock(&clocks).0);
 
         defmt::info!("init: monotonic timer");
 
