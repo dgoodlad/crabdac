@@ -43,7 +43,12 @@ pub struct UsbAudioClass<'a, B: UsbBus> {
     ep_audio_stream_fb: EndpointIn<'a, B>,
 
     pub audio_data_available: bool,
+    pub audio_feedback_needed: bool,
     pub enable_disable: Option<StreamingState>,
+
+    mute: bool,
+
+    printed: u8,
     //control_buf: [u8; sizes::CONTROL_BUFFER],
     //audio_stream_buf: &'a mut [u8],
 }
@@ -65,15 +70,6 @@ where
         let iface_audio_stream = alloc.interface();
         defmt::debug!("Success");
 
-        defmt::debug!("Allocating audio OUT endpoint");
-        let ep_audio_out = alloc.isochronous(
-                usb_device::endpoint::IsochronousSynchronizationType::Asynchronous,
-                usb_device::endpoint::IsochronousUsageType::Data,
-                sizes::AUDIO_STREAM_BUFFER as u16,
-                0x01
-            );
-        defmt::debug!("Success");
-
         defmt::debug!("Allocating audio IN endpoint");
         let ep_audio_fb_in = alloc.isochronous(
                 usb_device::endpoint::IsochronousSynchronizationType::NoSynchronization,
@@ -86,11 +82,20 @@ where
                 // K = 10 for UAC 1.0 on USB FS interfaces with frames running at 1kHz
                 //
                 // Assuming we're running at F_m = 256 * F_s = 2^8 * F_s:
-                // F_m = F_s * 2^(P - 1)
-                // P = 9
+                // F_m = F_s * 2^P
+                // P = 8
                 // K = 10
                 //
-                // bRefresh value is the exponent, which is 10 - P = 10 - 9 = 1
+                // bRefresh value is the exponent, which is 10 - P = 10 - 8 = 2
+                0x02
+            );
+        defmt::debug!("Success");
+
+        defmt::debug!("Allocating audio OUT endpoint");
+        let ep_audio_out = alloc.isochronous(
+                usb_device::endpoint::IsochronousSynchronizationType::Asynchronous,
+                usb_device::endpoint::IsochronousUsageType::Data,
+                sizes::AUDIO_STREAM_BUFFER as u16,
                 0x01
             );
         defmt::debug!("Success");
@@ -102,17 +107,36 @@ where
             ep_audio_stream_fb: ep_audio_fb_in,
             //control_buf: [0; sizes::CONTROL_BUFFER],
             audio_data_available: false,
+            audio_feedback_needed: false,
             enable_disable: None,
+            mute: false,
+            printed: 0,
         }
     }
 
-    pub fn read_audio_stream(&mut self, buffer: &mut [u8]) -> Result<usize, UsbError>
-    {
+    pub fn read_audio_stream(&mut self, buffer: &mut [u8]) -> Result<usize, UsbError> {
         assert!(buffer.len() >= sizes::AUDIO_STREAM_BUFFER);
         assert!(self.audio_data_available);
         self.ep_audio_stream.read(buffer.as_mut_slice()).map(|bytes_received| {
             self.audio_data_available = false;
+            if self.printed < 5 && (buffer[0] > 0x00 || buffer[4] > 0) {
+                self.printed += 1;
+                defmt::info!("Sending i2s data: {:#x}", buffer[0..bytes_received]);
+            }
             bytes_received
+        })
+    }
+
+    // TODO Feedback value should be:
+    //   (sample1 + sample2) << 9
+    // e.g (24599 + 24600) << 9 ~= 96.09 samples/frame
+    pub fn write_audio_feedback(&mut self, counter: &ClockCounter) -> Result<usize, UsbError> {
+        let fractional_value = counter.current_rate();
+        let buffer = &fractional_value.to_le_bytes()[0..3];
+        defmt::info!("usb audio :: feedback {:?} {:#x}", fractional_value, buffer);
+        self.ep_audio_stream_fb.write(buffer).and_then(|x| {
+            self.audio_feedback_needed = false;
+            Ok(x)
         })
     }
 
@@ -124,10 +148,6 @@ where
     fn disable_stream(&mut self) {
         defmt::info!("Disabling audio stream");
         self.enable_disable.replace(StreamingState::Disabled);
-    }
-
-    fn clear_enable_disable(&mut self) {
-        self.enable_disable.take().unwrap();
     }
 }
 
@@ -231,13 +251,9 @@ impl<B: UsbBus> UsbClass<B> for UsbAudioClass<'_, B> {
         if addr == self.ep_audio_stream.address() {
             defmt::trace!("Received audio stream packet");
             self.audio_data_available = true;
-            // self.ep_audio_stream.read(&mut self.audio_stream_buf).map_or_else(|err| {
-            //     defmt::warn!("Error in audio stream packet read");
-            // }, |size| {
-            //     defmt::debug!("Received {=usize} bytes of audio data", size);
-            // });
         }
     }
+
 
     fn control_in(&mut self, xfer: ControlIn<B>) {
         let request = xfer.request();
@@ -247,11 +263,11 @@ impl<B: UsbBus> UsbClass<B> for UsbAudioClass<'_, B> {
             control::RequestType::Reserved => { return; },
 
             control::RequestType::Standard => {
-                defmt::debug!("Control IN Standard Request");
+                defmt::info!("Control IN Standard Request {}", request.request);
 
                 match request.request {
                     control::Request::GET_INTERFACE => {
-                        defmt::debug!("GET_INTERFACE iface{}", request.index);
+                        defmt::info!("GET_INTERFACE iface{}", request.index);
                         if request.index as u8 == self.iface_audio_stream.into() {
                             xfer.accept_with(&[0_u8]).unwrap();
                         }
@@ -265,19 +281,18 @@ impl<B: UsbBus> UsbClass<B> for UsbAudioClass<'_, B> {
                     0b00100001 => {
                         // Audio Control Request - CUR - Interface Entity
                         // Likely MUTE
-                        defmt::debug!("Control IN - Audio Control - CUR - Entity - {:#x} {:#x}", request.index, request.value);
-                        if request.index == 0x02 && ((request.value & 0xff00) >> 8) == 0x00 {
+                        defmt::info!("Control IN - Audio Control - CUR - Entity - {:#x} {:#x}", request.index, request.value);
+                        if request.index == 0x02 && ((request.value & 0xff00) >> 8) == 0x01 {
                             // entity id 0x02 is our feature unit
-                            // CS (high byte of value) is control number 0, which is mute
-                            // TODO for now mute is always off
-                            xfer.accept_with(&[0_u8]).unwrap();
+                            // CS (high byte of value) is 1 == MUTE
+                            xfer.accept_with(&[self.mute as u8]).unwrap();
                         } else {
                             xfer.reject().unwrap();
                         }
                     },
                     0b00100010 => {
                         // Audio Control Request - CUR - Endpoint
-                        defmt::debug!("Control IN - Audio Control - CUR - Endpoint - {:#x} {:#x}", request.index, request.value);
+                        defmt::info!("Control IN - Audio Control - CUR - Endpoint - {:#x} {:#x}", request.index, request.value);
                         xfer.reject().unwrap();
                     },
                     _ => { xfer.reject().unwrap(); }
@@ -296,7 +311,7 @@ impl<B: UsbBus> UsbClass<B> for UsbAudioClass<'_, B> {
             control::RequestType::Standard => {
                 match request.request {
                     control::Request::SET_INTERFACE => {
-                        defmt::debug!("SET_INTERFACE iface{}->{}", request.index, request.value);
+                        defmt::info!("SET_INTERFACE iface{}->{}", request.index, request.value);
                         if request.index as u8 == self.iface_audio_stream.into() {
                             match request.value {
                                 0 => xfer.accept().map(|_| self.disable_stream()).unwrap(),
@@ -312,9 +327,73 @@ impl<B: UsbBus> UsbClass<B> for UsbAudioClass<'_, B> {
             },
 
             control::RequestType::Class => {
-                defmt::debug!("Class-specific request: {} {} {}", request.request, request.index, request.value);
+                defmt::info!("Class-specific request: {}, {:#b} {:#x} {:#x}, {:#x}", request.recipient as u8, request.request, request.value, request.index, request.length);
+                match request.request {
+                    0b00001 => {
+                        // Directed at an entity in an interface of the audio function
+                        let control_selector = request.value >> 8;
+                        let channel_number = request.value & 0xff;
+
+                        let entity_id = request.index >> 8;
+                        let interface_number = request.index & 0xff;
+
+                        let length = request.length as usize;
+
+                        let data = xfer.data();
+                        if entity_id == 0x02 { // hardcoded feature unit id TODO
+                            if interface_number as u8 == self.iface_audio_control.into() {
+                                if control_selector == 0x01 { // hardcoded control mute TODO
+                                    if channel_number == 0x00 { // hardcoded channel number TODO
+                                        assert!(data.len() == length);
+                                        assert!(length == 1);
+                                        let value = data[0];
+                                        self.mute = value == 1;
+                                        xfer.accept().unwrap();
+                                        defmt::info!("Toggled mute: {}", self.mute);
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    0b00010 => {
+                        // Directed at the isochronous endpoint of the audio streaming interface
+                    },
+                    _ => { defmt::info!("Unsupported class-specific request"); }
+                }
             }
 
         }
+    }
+
+    fn endpoint_in_complete(&mut self, addr: EndpointAddress) {
+        defmt::info!("Endpoint IN complete {}", addr.index());
+        self.audio_feedback_needed = true;
+    }
+}
+
+#[derive(Debug)]
+pub struct ClockCounter {
+    ticks: u32,
+    frames: u8,
+    mck_to_fs_ratio: u8,
+}
+
+impl ClockCounter {
+    pub fn new(mck_to_fs_ratio: u8) -> Self {
+        Self { ticks: 0, frames: 0, mck_to_fs_ratio }
+    }
+
+    pub fn clear(&mut self) {
+        self.ticks = 0;
+        self.frames = 0;
+    }
+
+    pub fn add(&mut self, ticks: u32) {
+        self.ticks += ticks;
+        self.frames += 1;
+    }
+
+    pub fn current_rate(&self) -> u32 {
+        self.ticks << (14 - self.mck_to_fs_ratio - (self.frames - 1))
     }
 }

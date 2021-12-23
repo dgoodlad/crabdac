@@ -77,7 +77,7 @@ impl UsbFrameTimer for TIM2 {
     fn count(&self) -> Option<u32> {
         if self.sr.read().cc1if().is_match() {
             self.sr.modify(|_r, w| w.tif().clear());
-            Some(self.ccr2.read().bits())
+            Some(self.ccr1.read().bits())
         } else {
             None
         }
@@ -95,6 +95,8 @@ impl ExternallyClockedTimer for TIM2 {
             .ece().enabled()
             // without any filter on the clock
             .etf().no_filter()
+            // detect rising edges (TODO double-check this)
+            .etp().not_inverted()
             // without any prescaler
             .etps().div1()
         });

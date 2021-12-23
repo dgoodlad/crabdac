@@ -7,21 +7,17 @@ use crabdac as _;
 mod app {
     use core::intrinsics::transmute;
 
+    use crabdac::timer::CaptureChannel;
+    use crabdac::timer::UsbAudioFrequencyFeedback;
     use crabdac::uac;
     use crabdac::uac::StreamingState;
     use hal::dma::StreamX;
-    use hal::dma::traits::Stream;
-    use rtic::Mutex;
-    use usb_device::class::UsbClass;
+    use hal::gpio::gpiob::PB8;
 
     use bbqueue;
-    use bbqueue::GrantR;
     use bytemuck::*;
     use crabdac::uac::UsbAudioClass;
-    use embedded_dma::StaticReadBuffer;
     use hal::gpio::Input;
-    use hal::hal::digital::v2::IoPin;
-    use stable_deref_trait::StableDeref;
     use stm32_i2s_v12x::MasterConfig;
     use stm32_i2s_v12x::Polarity;
     use stm32_i2s_v12x::TransmitMode;
@@ -36,12 +32,13 @@ mod app {
     use stm32f4xx_hal::gpio::Alternate;
     use stm32f4xx_hal::gpio::PushPull;
     use stm32f4xx_hal::gpio::gpioa::PA4;
+    use stm32f4xx_hal::gpio::gpioa::PA15;
     use stm32f4xx_hal::gpio::gpioc::PC7;
     use stm32f4xx_hal::gpio::gpioc::PC10;
     use stm32f4xx_hal::gpio::gpioc::PC12;
     use stm32f4xx_hal::i2s;
-    use stm32f4xx_hal::i2s::NoMasterClock;
     use stm32f4xx_hal::{prelude::*, pac, timer::{monotonic::MonoTimer, Timer}};
+    use stm32f4xx_hal::rcc::BusTimerClock;
 
     use usb_device::prelude::*;
     use usb_device::bus::UsbBusAllocator;
@@ -55,11 +52,12 @@ mod app {
     const SAMPLE_WORD_SIZE: usize = 4;
     const MAX_FRAME_SIZE: usize = ((SAMPLE_RATE / USB_FRAME_RATE + 1) * CHANNELS) as usize * SAMPLE_WORD_SIZE;
     const FRAME_HEADER_SIZE: usize = 2;
-    const BUFFER_SIZE: usize = (MAX_FRAME_SIZE + FRAME_HEADER_SIZE) * 3;
+    const BUFFER_SIZE: usize = (MAX_FRAME_SIZE + FRAME_HEADER_SIZE) * 4;
 
     #[shared]
     struct Shared {
         i2s_dma: Option<I2sDmaTransfer>,
+        feedback_clock_counter: uac::ClockCounter,
     }
 
     #[local]
@@ -126,7 +124,7 @@ mod app {
         let pb8: PB8<Alternate<PushPull, 1>> = gpiob.pb8.into_alternate();
 
         let feedback_timer: UsbAudioFrequencyFeedback<pac::TIM2, PB8<Alternate<PushPull, 1>>> =
-            UsbAudioFrequencyFeedback::new(cx.device.TIM2, CaptureChannel::Channel2, pb8);
+            UsbAudioFrequencyFeedback::new(cx.device.TIM2, CaptureChannel::Channel1, pb8);
         feedback_timer.start();
 
 
@@ -188,14 +186,16 @@ mod app {
 
         let dma1_streams = StreamsTuple::new(cx.device.DMA1);
 
+        let feedback_clock_counter = uac::ClockCounter::new(8);
+
         (
             Shared {
                 i2s_dma: None,
+                feedback_clock_counter,
             },
             Local {
                 producer,
                 consumer,
-                //i2s_dma,
                 read_grant: None,
                 write_grant: None,
                 usb_dev,
@@ -234,14 +234,19 @@ mod app {
 
             cx.shared.i2s_dma.lock(|o| o.replace(i2s_dma));
         } else {
-            assert!(dma1_stream_5.is_none());
-            assert!(i2s.is_none());
+            //assert!(dma1_stream_5.is_none());
+            //assert!(i2s.is_none());
 
             cx.shared.i2s_dma.lock(|x| {
-                let (stream, peripheral, _buf, _) = x.take().unwrap().release();
-                dma1_stream_5.replace(stream);
-                i2s.replace(peripheral);
-                // TODO release the buffer grant somehow
+                match x.take() {
+                    Some(i2s_dma) => {
+                        let (stream, peripheral, _buf, _) = i2s_dma.release();
+                        dma1_stream_5.replace(stream);
+                        i2s.replace(peripheral);
+                        // TODO release the buffer grant somehow
+                    },
+                    None => {}
+                }
             });
         }
     }
@@ -255,20 +260,18 @@ mod app {
         }
     }
 
-    #[task(binds = OTG_HS, local = [producer, usb_dev, usb_audio])]
-    fn usb_handler(cx: usb_handler::Context) {
-        defmt::debug!("usb_handler");
+    #[task(binds = OTG_HS, local = [producer, usb_dev, usb_audio], shared = [feedback_clock_counter])]
+    fn usb_handler(mut cx: usb_handler::Context) {
         let producer = cx.local.producer;
         let usb_dev = cx.local.usb_dev;
-        let mut usb_audio: &mut UsbAudioClass<UsbBusType> = cx.local.usb_audio;
+        let usb_audio: &mut UsbAudioClass<UsbBusType> = cx.local.usb_audio;
 
         while usb_dev.poll(&mut [usb_audio]) {
-            defmt::trace!("idle :: usb poll");
             if usb_audio.audio_data_available {
                 defmt::trace!("usb_handler :: requesting frame up to {:#x} bytes", MAX_FRAME_SIZE);
                 let mut grant = match producer.grant(MAX_FRAME_SIZE) {
                     Ok(grant) => grant,
-                    Err(_) => { defmt::debug!("Dropped USB Frame"); continue; }
+                    Err(_) => { defmt::info!("Dropped USB Frame"); continue; }
                 };
 
                 let bytes_received = usb_audio.read_audio_stream(&mut grant).unwrap();
@@ -277,35 +280,26 @@ mod app {
                 defmt::trace!("usb_handler :: committed {:#x} bytes", bytes_received);
             }
 
-            //match usb_audio.write_audio_feedback(&[0x60, 0x00, 0x00]) {
-            //    Ok(bytes) => defmt::info!("Wrote {} bytes of feedback", bytes),
-            //    Err(_) => defmt::info!("Error writing feedback"),
-            //}
+            if usb_audio.audio_feedback_needed {
+                cx.shared.feedback_clock_counter.lock(|counter| {
+                    usb_audio.write_audio_feedback(counter).unwrap_or_else(|_e| {
+                        defmt::debug!("usb_handler :: feedback skipped, would block");
+                        0
+                    });
+                    counter.clear();
+                });
+            }
 
             usb_audio.enable_disable.take().map(|b| {
+                if b == StreamingState::Enabled {
+                    usb_audio.audio_feedback_needed = true;
+                }
                 match toggle_i2s_dma::spawn(b) {
                     Ok(_) => defmt::info!("Toggled I2S DMA"),
                     Err(_) => defmt::info!("Failed to toggle I2s DMA")
                 }
             });
         }
-
-        // let usb_handler::LocalResources { producer, usb_dev, usb_audio } = cx.local;
-
-        // while usb_dev.poll(&mut [usb_audio]) {
-        //     if usb_audio.audio_data_available {
-        //         defmt::debug!("usb_handler :: requesting frame up to {:#x} bytes", MAX_FRAME_SIZE);
-        //         let mut grant = match producer.grant(MAX_FRAME_SIZE) {
-        //             Ok(grant) => grant,
-        //             Err(_) => { defmt::debug!("Dropped USB Frame"); return; }
-        //         };
-
-        //         let bytes_received = usb_audio.read_audio_stream(&mut grant).unwrap();
-        //         grant.commit(bytes_received);
-
-        //         defmt::debug!("usb_handler :: committed {:#x} bytes", bytes_received);
-        //     }
-        // }
     }
 
     #[task(binds = DMA1_STREAM5, priority = 3, local = [consumer, read_grant], shared = [i2s_dma])]
@@ -315,7 +309,6 @@ mod app {
         let i2s_dma_handler::Context { local, shared } = cx;
         let i2s_dma_handler::LocalResources { consumer, read_grant } = local;
         let i2s_dma_handler::SharedResources { mut i2s_dma } = shared;
-
 
         defmt::debug!("i2s_dma_handler");
 
@@ -341,10 +334,13 @@ mod app {
                 },
                 Some(next_grant) => {
                     defmt::debug!("i2s_dma_handler :: next transfer {:#x} bytes", next_grant.len());
+
                     i2s_dma.lock(|dma| {
                         assert!(dma.is_some());
-                        dma.as_mut().unwrap()
-                                    .next_transfer(cast_slice(unsafe { transmute::<&[u8], &'static [u8]>(&next_grant) })).unwrap()
+                        let b: &[u16] = cast_slice(unsafe { transmute::<&[u8], &'static [u8]>(&next_grant) });
+                        dma.as_mut()
+                           .unwrap()
+                           .next_transfer(b).unwrap()
                     });
                     read_grant.replace(next_grant);
                 }
@@ -353,13 +349,15 @@ mod app {
         }
     }
 
-    #[task(binds = TIM2, local = [feedback_timer])]
-    fn tim2(cx: tim2::Context) {
+    #[task(binds = TIM2, local = [feedback_timer], shared = [feedback_clock_counter])]
+    fn tim2(mut cx: tim2::Context) {
         defmt::debug!("TIM2 interrupt");
         let count = cx.local.feedback_timer.get_count();
         match count {
             None => defmt::info!("TIM2 interrupt but no TIR"),
-            Some(i) => if i > 0 { defmt::info!("TIM2 count {}", i) },
+            Some(i) => {
+                cx.shared.feedback_clock_counter.lock(|counter| counter.add(i));
+            },
         }
     }
 
