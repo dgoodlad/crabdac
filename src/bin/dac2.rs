@@ -64,7 +64,6 @@ mod app {
     struct Local {
         producer: bbqueue::framed::FrameProducer<'static, BUFFER_SIZE>,
         consumer: bbqueue::framed::FrameConsumer<'static, BUFFER_SIZE>,
-        write_grant: Option<bbqueue::framed::FrameGrantW<'static, BUFFER_SIZE>>,
         read_grant: Option<bbqueue::framed::FrameGrantR<'static, BUFFER_SIZE>>,
         usb_dev: UsbDevice<'static, UsbBusType>,
         usb_audio: UsbAudioClass<'static, UsbBusType>,
@@ -114,19 +113,12 @@ mod app {
         let gpiob = cx.device.GPIOB.split();
         let gpioc = cx.device.GPIOC.split();
 
-        // OTG_VBUS_SENSE
-        let pb13: hal::gpio::Pin<Input<hal::gpio::Floating>, 'B', 13> = gpiob.pb13.into_floating_input();
-
-        // OTG_FS_SOF
-        let pa4: PA4<Alternate<PushPull, 12>> = gpioa.pa4.into_alternate();
-
         // TIM2_ETR
         let pb8: PB8<Alternate<PushPull, 1>> = gpiob.pb8.into_alternate();
 
         let feedback_timer: UsbAudioFrequencyFeedback<pac::TIM2, PB8<Alternate<PushPull, 1>>> =
             UsbAudioFrequencyFeedback::new(cx.device.TIM2, CaptureChannel::Channel1, pb8);
         feedback_timer.start();
-
 
         let usb = USB {
             usb_global: cx.device.OTG_HS_GLOBAL,
@@ -147,11 +139,7 @@ mod app {
             .manufacturer("Crabs Pty Ltd.")
             .product("CrabDAC")
             .serial_number("TEST")
-            // This class/subclass/protocol indicates that there is an Interface
-            // Association Descriptor included in the configuration.
-            .device_class(0xef)
-            .device_sub_class(0x02)
-            .device_protocol(0x01)
+            .composite_with_iads()
             .max_packet_size_0(8)
             .self_powered(true)
             .max_power(250)
@@ -197,7 +185,6 @@ mod app {
                 producer,
                 consumer,
                 read_grant: None,
-                write_grant: None,
                 usb_dev,
                 usb_audio,
                 dma1_stream_5: Some(dma1_streams.5),
