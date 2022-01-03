@@ -1,6 +1,8 @@
 use usb_device::class_prelude::*;
 use as_slice::AsMutSlice;
 
+mod descriptors;
+
 const CHANNELS: u32 = 2;
 const SAMPLING_RATE: u32 = 96_000;
 const BITS_PER_SAMPLE: u32 = 24;
