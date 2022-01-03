@@ -60,6 +60,55 @@ pub mod audio_device_class_release_numbers {
     pub const BCD_200: u16 = 0x2000;
 }
 
+pub mod terminal_type {
+    pub const USB_UNDEFINED: u16 = 0x0100;
+    pub const USB_STREAMING: u16 = 0x0101;
+    pub const USB_VENDOR_SPECIFIC: u16 = 0x01FF;
+
+    pub const INPUT_UNDEFINED: u16 = 0x0200;
+    pub const INPUT_MICROPHONE: u16 = 0x0201;
+    pub const INPUT_DESKTOP_MICROPHONE: u16 = 0x0202;
+    pub const INPUT_PERSONAL_MICROPHONE: u16 = 0x0203;
+    pub const INPUT_OMNIDIRECTIONAL_MICROPHONE: u16 = 0x0204;
+    pub const INPUT_MICROPHONE_ARRAY: u16 = 0x0205;
+    pub const INPUT_PROCESSING_MICROPHONE_ARRAY: u16 = 0x0206;
+
+    pub const OUTPUT_UNDEFINED: u16 = 0x0300;
+    pub const OUTPUT_SPEAKER: u16 = 0x0301;
+    pub const OUTPUT_HEADPHONES: u16 = 0x0302;
+    pub const OUTPUT_HEAD_MOUNTED_DISPLAY_AUDIO: u16 = 0x0303;
+    pub const OUTPUT_DESKTOP_SPEAKER: u16 = 0x0304;
+    pub const OUTPUT_ROOM_SPEAKER: u16 = 0x0305;
+    pub const OUTPUT_COMMUNICATION_SPEAKER: u16 = 0x0306;
+    pub const OUTPUT_LFE_SPEAKER: u16 = 0x0307;
+
+    pub const BIDIRECTIONAL_UNDEFINED: u16 = 0x0400;
+    pub const BIDIRECTIONAL_HANDSET: u16 = 0x0401;
+    pub const BIDIRECTIONAL_HEADSET: u16 = 0x0402;
+    pub const BIDIRECTIONAL_SPEAKERPHONE_NO_ECHO_REDUCTION: u16 = 0x0403;
+    pub const BIDIRECTIONAL_SPEAKERPHONE_ECHO_SUPPRESSING: u16 = 0x0404;
+    pub const BIDIRECTIONAL_SPEAKERPHONE_ECHO_CANCELING: u16 = 0x0405;
+
+    pub const TELEPHONY_UNDEFINED: u16 = 0x0500;
+    pub const TELEPHONY_PHONE_LINE: u16 = 0x0501;
+    pub const TELEPHONY_TELEPHONE: u16 = 0x0502;
+    pub const TELEPHONY_DOWN_LINE_PHONE: u16 = 0x0503;
+
+    pub const EXTERNAL_UNDEFINED: u16 = 0x0600;
+    pub const EXTERNAL_ANALOG_CONNECTOR: u16 = 0x0601;
+    pub const EXTERNAL_DIGITAL_AUDIO_INTERFACE: u16 = 0x0602;
+    pub const EXTERNAL_LINE_CONNECTOR: u16 = 0x0603;
+    pub const EXTERNAL_LEGACY_AUDIO_CONNECTOR: u16 = 0x0604;
+    pub const EXTERNAL_SPDIF_INTERFACE: u16 = 0x0605;
+    pub const EXTERNAL_1394_DA_STREAM: u16 = 0x0606;
+    pub const EXTERNAL_1394_DV_STREAM_SOUNDTRACK: u16 = 0x0607;
+    pub const EXTERNAL_ADAT_LIGHTPIPE: u16 = 0x0608;
+    pub const EXTERNAL_TDIF: u16 = 0x0609;
+    pub const EXTERNAL_MADI: u16 = 0x060a;
+
+    //TODO embedded function terminal types (0x07XX)
+}
+
 #[derive(Copy, Clone, Eq, PartialEq)]
 pub struct TerminalId(u8);
 
