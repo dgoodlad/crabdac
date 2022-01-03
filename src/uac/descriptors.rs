@@ -1,4 +1,7 @@
-use usb_device::{class_prelude::{DescriptorWriter, InterfaceNumber, StringIndex}, descriptor, Result, UsbError};
+use usb_device::{
+    class_prelude::{DescriptorWriter, InterfaceNumber, StringIndex},
+    descriptor, Result, UsbError,
+};
 
 #[allow(dead_code)]
 pub mod descriptor_type {
@@ -12,20 +15,20 @@ pub mod descriptor_type {
 
 #[allow(dead_code)]
 pub mod ac_interface_descriptor_subtype {
-    pub const AC_UNDEFINED:u8 = 0x00;
-    pub const HEADER:u8 = 0x01;
-    pub const INPUT_TERMINAL:u8 = 0x02;
-    pub const OUTPUT_TERMINAL:u8 = 0x03;
-    pub const MIXER_UNIT:u8 = 0x04;
-    pub const SELECTOR_UNIT:u8 = 0x05;
-    pub const FEATURE_UNIT:u8 = 0x06;
-    pub const EFFECT_UNIT:u8 = 0x07;
-    pub const PROCESSING_UNIT:u8 = 0x08;
-    pub const EXTENSION_UNIT:u8 = 0x09;
-    pub const CLOCK_SOURCE:u8 = 0x0A;
-    pub const CLOCK_SELECTOR:u8 = 0x0B;
-    pub const CLOCK_MULTIPLIER:u8 = 0x0C;
-    pub const SAMPLE_RATE_CONVERTER:u8 = 0x0D;
+    pub const AC_UNDEFINED: u8 = 0x00;
+    pub const HEADER: u8 = 0x01;
+    pub const INPUT_TERMINAL: u8 = 0x02;
+    pub const OUTPUT_TERMINAL: u8 = 0x03;
+    pub const MIXER_UNIT: u8 = 0x04;
+    pub const SELECTOR_UNIT: u8 = 0x05;
+    pub const FEATURE_UNIT: u8 = 0x06;
+    pub const EFFECT_UNIT: u8 = 0x07;
+    pub const PROCESSING_UNIT: u8 = 0x08;
+    pub const EXTENSION_UNIT: u8 = 0x09;
+    pub const CLOCK_SOURCE: u8 = 0x0A;
+    pub const CLOCK_SELECTOR: u8 = 0x0B;
+    pub const CLOCK_MULTIPLIER: u8 = 0x0C;
+    pub const SAMPLE_RATE_CONVERTER: u8 = 0x0D;
 }
 
 #[allow(dead_code)]
@@ -91,15 +94,21 @@ impl ChannelConfig {
     }
 
     fn add_channel(&mut self, n: u8) -> &mut Self {
-        if self.channels & 1 << n > 0 { return self }
+        if self.channels & 1 << n > 0 {
+            return self;
+        }
 
         self.num_channels += 1;
         self.channels |= 1 << n;
         self
     }
 
-    pub fn front_left(&mut self) -> &mut Self { self.add_channel(0) }
-    pub fn front_right(&mut self) -> &mut Self { self.add_channel(1) }
+    pub fn front_left(&mut self) -> &mut Self {
+        self.add_channel(0)
+    }
+    pub fn front_right(&mut self) -> &mut Self {
+        self.add_channel(1)
+    }
 }
 
 #[repr(u16)]
@@ -123,7 +132,11 @@ impl Controls {
         self.bitmap.to_le_bytes()
     }
 
-    fn set_control(&mut self, bit_offset: usize, capabilities: ControlCapabilities) -> &mut Controls {
+    fn set_control(
+        &mut self,
+        bit_offset: usize,
+        capabilities: ControlCapabilities,
+    ) -> &mut Controls {
         self.bitmap |= (capabilities as u16) << bit_offset;
         self
     }
@@ -164,8 +177,10 @@ pub struct AudioControlInterfaceDescriptorWriter<'a> {
 const MAX_STREAMING_INTERFACES: usize = 8;
 
 impl<'a> AudioControlInterfaceDescriptorWriter<'a> {
-
-    pub fn new(buf: &'a mut [u8], streaming_interfaces: &'a [InterfaceNumber]) -> AudioControlInterfaceDescriptorWriter<'a> {
+    pub fn new(
+        buf: &'a mut [u8],
+        streaming_interfaces: &'a [InterfaceNumber],
+    ) -> AudioControlInterfaceDescriptorWriter<'a> {
         AudioControlInterfaceDescriptorWriter {
             buf,
             position: 0,
@@ -176,7 +191,9 @@ impl<'a> AudioControlInterfaceDescriptorWriter<'a> {
     }
 
     pub fn alloc_terminal(&mut self) -> Result<TerminalId> {
-        if self.next_terminal_id == 255 { return Err(UsbError::Unsupported) }
+        if self.next_terminal_id == 255 {
+            return Err(UsbError::Unsupported);
+        }
 
         let terminal_id = TerminalId(self.next_terminal_id);
         self.next_terminal_id += 1;
@@ -247,21 +264,25 @@ impl<'a> AudioControlInterfaceDescriptorWriter<'a> {
         let terminal_id = self.alloc_terminal()?;
         let channel_bytes = channels.channels();
         let controls_bytes = controls.bitmap();
-        self.write(ac_interface_descriptor_subtype::INPUT_TERMINAL, &[
-            terminal_id.into(),
-            terminal_type[0], terminal_type[1],
-            assoc_terminal_id.map_or(0, |id| id.into()),
-            clock_source_id.map_or(0, |id| id.into()),
-            channels.num_channels(),
-            channel_bytes[0],
-            channel_bytes[1],
-            channel_bytes[2],
-            channel_bytes[3],
-            channels.channel_names.map_or(0, |id| id.into()),
-            controls_bytes[0],
-            controls_bytes[1],
-            name.map_or(0, |id| id.into()),
-        ])?;
+        self.write(
+            ac_interface_descriptor_subtype::INPUT_TERMINAL,
+            &[
+                terminal_id.into(),
+                terminal_type[0],
+                terminal_type[1],
+                assoc_terminal_id.map_or(0, |id| id.into()),
+                clock_source_id.map_or(0, |id| id.into()),
+                channels.num_channels(),
+                channel_bytes[0],
+                channel_bytes[1],
+                channel_bytes[2],
+                channel_bytes[3],
+                channels.channel_names.map_or(0, |id| id.into()),
+                controls_bytes[0],
+                controls_bytes[1],
+                name.map_or(0, |id| id.into()),
+            ],
+        )?;
         Ok(terminal_id)
     }
 
@@ -273,13 +294,17 @@ impl<'a> AudioControlInterfaceDescriptorWriter<'a> {
         name: Option<StringIndex>,
     ) -> Result<TerminalId> {
         let terminal_id = self.alloc_terminal()?;
-        self.write(ac_interface_descriptor_subtype::OUTPUT_TERMINAL, &[
-            terminal_id.into(),
-            terminal_type[0], terminal_type[1],
-            assoc_terminal_id.map_or(0, |id| id.into()),
-            source_terminal_id.into(),
-            name.map_or(0, |id| id.into()),
-        ])?;
+        self.write(
+            ac_interface_descriptor_subtype::OUTPUT_TERMINAL,
+            &[
+                terminal_id.into(),
+                terminal_type[0],
+                terminal_type[1],
+                assoc_terminal_id.map_or(0, |id| id.into()),
+                source_terminal_id.into(),
+                name.map_or(0, |id| id.into()),
+            ],
+        )?;
         Ok(terminal_id)
     }
 
@@ -291,8 +316,22 @@ impl<'a> AudioControlInterfaceDescriptorWriter<'a> {
         todo!()
     }
 
-    fn ac_interface_feature_unit(&mut self) {
-        todo!()
+    fn ac_interface_feature_unit(
+        &mut self,
+        source_terminal_id: TerminalId,
+        master_channel_controls: Controls,
+        logical_channel_controls: &[Controls],
+    ) {
+        let terminal_id = self.alloc_terminal()?;
+        self.write(
+            ac_interface_descriptor_subtype::FEATURE_UNIT,
+            &[
+                terminal_id.into(),
+                source_terminal_id.into(),
+                0x01 + logical_channel_controls.len() as u8,
+                master_channel_controls.into(),
+            ],
+        )
     }
 
     fn ac_interface_effect_unit(&mut self) {
