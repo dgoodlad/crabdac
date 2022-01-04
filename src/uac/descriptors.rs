@@ -3,6 +3,66 @@ use usb_device::{
     descriptor, Result, UsbError,
 };
 
+/// Audio Function Class Code
+/// USB Audio 2.0 Spec Table A-1
+#[allow(dead_code)]
+pub mod audio_function_class {
+    pub const AUDIO_FUNCTION: u8 = super::audio_interface_class::AUDIO;
+}
+
+/// Audio Function Subclass Codes
+/// USB Audio 2.0 Spec Table A-2
+#[allow(dead_code)]
+pub mod audio_function_subclass {
+    pub const FUNCTION_SUBCLASS_UNDEFINED: u8 = 0x00;
+}
+
+/// Audio Function Protocol Codes
+/// USB Audio 2.0 Spec Table A-3
+#[allow(dead_code)]
+pub mod audio_function_protocol {
+    pub const FUNCTION_PROTOCOL_UNDEFINED: u8 = 0x00;
+    pub const AF_VERSION_02_00: u8 = super::audio_interface_protocol::IP_VERSION_02_00;
+}
+
+/// Audio Interface Class Code
+/// USB Audio 2.0 Spec Table A-4
+#[allow(dead_code)]
+pub mod audio_interface_class {
+    pub const AUDIO: u8 = 0x01;
+}
+
+/// Audio Interface Subclass Codes
+/// USB Audio 2.0 Spec Table A-5
+#[allow(dead_code)]
+pub mod audio_interface_subclass {
+    pub const INTERFACE_SUBCLASS_UNDEFINED: u8 = 0x00;
+    pub const AUDIOCONTROL: u8 = 0x01;
+    pub const AUDIOSTREAMING: u8 = 0x02;
+    pub const MIDISTREAMING: u8 = 0x03;
+}
+
+/// Audio Interface Protocol Codes
+/// USB Audio 2.0 Spec Table A-6
+#[allow(dead_code)]
+pub mod audio_interface_protocol {
+    pub const INTERFACE_PROTOCOL_UNDEFINED: u8 = 0x00;
+    pub const IP_VERSION_02_00: u8 = 0x20;
+}
+
+/// Audio Function Category Codes
+/// USB Audio 2.0 Spec Table A-7
+#[allow(dead_code)]
+pub mod audio_function_category {
+    pub const FUNCTION_SUBCLASS_UNDEFINED: u8 = 0x00;
+    pub const DESKTOP_SPEAKER: u8 = 0x01;
+    pub const HOME_THEATER: u8 = 0x02;
+    // TODO add the rest of the codes from from Audio20 A.7
+    pub const OTHER: u8 = 0xff;
+}
+
+/// Audio Class-Specific Descriptor Types
+/// USB Audio 2.0 Spec Table A-8
 #[allow(dead_code)]
 pub mod descriptor_type {
     pub const CS_UNDEFINED: u8 = 0x20;
@@ -13,6 +73,8 @@ pub mod descriptor_type {
     pub const CS_ENDPOINT: u8 = 0x25;
 }
 
+/// Audio Class-Specific AC Interface Descriptor Subtypes
+/// USB Audio 2.0 Spec Table A-9
 #[allow(dead_code)]
 pub mod ac_interface_descriptor_subtype {
     pub const AC_UNDEFINED: u8 = 0x00;
@@ -31,6 +93,8 @@ pub mod ac_interface_descriptor_subtype {
     pub const SAMPLE_RATE_CONVERTER: u8 = 0x0D;
 }
 
+/// Audio Class-Specific AS Interface Descriptor Subtypes
+/// USB Audio 2.0 Spec Table A-10
 #[allow(dead_code)]
 pub mod as_interface_descriptor_subtype {
     pub const AS_DESCRIPTOR_UNDEFINED: u8 = 0x00;
@@ -40,6 +104,35 @@ pub mod as_interface_descriptor_subtype {
     pub const DECODER: u8 = 0x04;
 }
 
+/// Audio Class-Specific Endpoint Descriptor Subtypes
+/// USB Audio 2.0 Spec Table A-13
+#[allow(dead_code)]
+pub mod endpoint_descriptor_subtypes {
+    pub const DESCRIPTOR_UNDEFINED: u8 = 0x00;
+    pub const EP_GENERAL: u8 = 0x01;
+}
+
+/// Audio Class-Specific Request Codes
+/// USB Audio 2.0 Spec Table A-14
+#[allow(dead_code)]
+pub mod request_codes {
+    pub const REQUEST_CODE_UNDEFINED: u8 = 0x00;
+    pub const CUR: u8 = 0x01;
+    pub const RANGE: u8 = 0x02;
+    pub const MEM: u8 = 0x03;
+}
+
+/// Clock Source Control Selectors
+/// Table A-17
+#[allow(dead_code)]
+pub mod clock_source_control_selectors {
+    pub const CS_CONTROL_UNDEFINED: u8 = 0x00;
+    pub const CS_SAM_FREQ_CONTROL: u8 = 0x01;
+    pub const CS_CLOCK_VALID_CONTROL: u8 = 0x02;
+}
+
+/// Feature Unit Control Selectors
+/// Table A-23
 #[allow(dead_code)]
 pub mod feature_unit_control_selector {
     pub const FU_CONTROL_UNDEFINED: u8 = 0x00;
@@ -48,18 +141,25 @@ pub mod feature_unit_control_selector {
     // TODO add the rest
 }
 
+/// AudioStreaming Interface Control Selectors
+/// Table A-32
 #[allow(dead_code)]
-pub mod endpoint_descriptor_subtype {
-    pub const DESCRIPTOR_UNDEFINED: u8 = 0x00;
-    pub const EP_GENERAL: u8 = 0x01;
+pub mod audiostreaming_interface_control_selectors {
+    pub const AS_CONTROL_UNDEFINED: u8 = 0x00;
+    pub const AS_ACT_ALT_SETTING_CONTROL: u8 = 0x01;
+    pub const AS_VAL_ALT_SETTINGS_CONTROL: u8 = 0x02;
+    pub const AS_AUDIO_DATA_FORMAT_CONTROL: u8 = 0x03;
+}
+
+/// Endpoint Control Selectors
+/// Table A-38
+#[allow(dead_code)]
+pub mod endpoint_control_selectors {
+    pub const EP_CONTROL_UNDEFINED: u8 = 0x00;
+    // TODO add the rest
 }
 
 #[allow(dead_code)]
-pub mod audio_device_class_release_numbers {
-    pub const BCD_100: u16 = 0x1000;
-    pub const BCD_200: u16 = 0x2000;
-}
-
 pub mod terminal_type {
     pub const USB_UNDEFINED: u16 = 0x0100;
     pub const USB_STREAMING: u16 = 0x0101;
@@ -110,10 +210,10 @@ pub mod terminal_type {
 }
 
 #[derive(Copy, Clone, Eq, PartialEq)]
-pub struct TerminalId(u8);
+pub struct EntityId(u8);
 
-impl From<TerminalId> for u8 {
-    fn from(n: TerminalId) -> u8 {
+impl From<EntityId> for u8 {
+    fn from(n: EntityId) -> u8 {
         n.0
     }
 }
@@ -160,7 +260,7 @@ impl ChannelConfig {
     }
 }
 
-#[repr(u16)]
+#[repr(u8)]
 #[derive(Copy, Clone, Eq, PartialEq)]
 pub enum ControlCapabilities {
     NotPresent = 0b00,
@@ -168,13 +268,13 @@ pub enum ControlCapabilities {
     HostProgrammable = 0b11,
 }
 
-pub struct Controls {
+pub struct InputTerminalControls {
     bitmap: u16,
 }
 
-impl Controls {
-    pub fn new() -> Controls {
-        Controls { bitmap: 0 }
+impl InputTerminalControls {
+    pub fn new() -> InputTerminalControls {
+        InputTerminalControls { bitmap: 0 }
     }
 
     pub fn bitmap(&self) -> [u8; 2] {
@@ -185,33 +285,108 @@ impl Controls {
         &mut self,
         bit_offset: usize,
         capabilities: ControlCapabilities,
-    ) -> &mut Controls {
+    ) -> &mut InputTerminalControls {
         self.bitmap |= (capabilities as u16) << bit_offset;
         self
     }
 
-    pub fn copy_protect(&mut self, capabilities: ControlCapabilities) -> &mut Controls {
+    pub fn copy_protect(&mut self, capabilities: ControlCapabilities) -> &mut InputTerminalControls {
         self.set_control(0, capabilities)
     }
 
-    pub fn connector(&mut self, capabilities: ControlCapabilities) -> &mut Controls {
+    pub fn connector(&mut self, capabilities: ControlCapabilities) -> &mut InputTerminalControls {
         self.set_control(2, capabilities)
     }
 
-    pub fn overload(&mut self, capabilities: ControlCapabilities) -> &mut Controls {
+    pub fn overload(&mut self, capabilities: ControlCapabilities) -> &mut InputTerminalControls {
         self.set_control(4, capabilities)
     }
 
-    pub fn cluster(&mut self, capabilities: ControlCapabilities) -> &mut Controls {
+    pub fn cluster(&mut self, capabilities: ControlCapabilities) -> &mut InputTerminalControls {
         self.set_control(6, capabilities)
     }
 
-    pub fn underflow(&mut self, capabilities: ControlCapabilities) -> &mut Controls {
+    pub fn underflow(&mut self, capabilities: ControlCapabilities) -> &mut InputTerminalControls {
         self.set_control(8, capabilities)
     }
 
-    pub fn overflow(&mut self, capabilities: ControlCapabilities) -> &mut Controls {
+    pub fn overflow(&mut self, capabilities: ControlCapabilities) -> &mut InputTerminalControls {
         self.set_control(10, capabilities)
+    }
+}
+
+pub struct FeatureUnitControls(u32);
+
+impl FeatureUnitControls {
+    pub fn new() -> FeatureUnitControls {
+        FeatureUnitControls(0)
+    }
+
+    pub fn bitmap(&self) -> [u8; 4] {
+        self.0.to_le_bytes()
+    }
+
+    fn set_control(
+        &mut self,
+        bit_offset: usize,
+        capabilities: ControlCapabilities
+    ) -> &mut Self {
+        self.0 |= (capabilities as u32) << bit_offset;
+        self
+    }
+
+    pub fn mute(&mut self, capabilities: ControlCapabilities) -> &mut Self {
+        self.set_control(0, capabilities)
+    }
+
+    pub fn volume(&mut self, capabilities: ControlCapabilities) -> &mut Self {
+        self.set_control(2, capabilities)
+    }
+
+    // TODO add the remaining controls from Table 4-13 offset 5
+}
+
+#[repr(u8)]
+pub enum ClockType {
+    External = 0b00,
+    InternalFixed = 0b01,
+    InternalVariable = 0b10,
+    InternalProgrammable = 0b11,
+}
+
+pub struct ClockAttributes(u8);
+
+impl ClockAttributes {
+    pub fn build(clock_type: ClockType, sync_to_sof: bool) -> ClockAttributes {
+        ClockAttributes(
+            clock_type as u8 |
+            (sync_to_sof as u8) << 2
+        )
+    }
+}
+
+pub struct ClockControls(u8);
+
+impl ClockControls {
+    pub fn new() -> ClockControls {
+        ClockControls(0)
+    }
+
+    fn set_control(
+        &mut self,
+        bit_offset: usize,
+        capabilities: ControlCapabilities,
+    ) -> &mut Self {
+        self.0 |= (capabilities as u8) << bit_offset;
+        self
+    }
+
+    pub fn clock_frequency_control(&mut self, capabilities: ControlCapabilities) -> &mut ClockControls {
+        self.set_control(0, capabilities)
+    }
+
+    pub fn clock_validity_control(&mut self, capabilities: ControlCapabilities) -> &mut ClockControls {
+        self.set_control(2, capabilities)
     }
 }
 
@@ -220,7 +395,7 @@ pub struct AudioControlInterfaceDescriptorWriter<'a> {
     position: usize,
     audio_class_version: u16,
     streaming_interfaces: &'a [InterfaceNumber],
-    next_terminal_id: u8,
+    next_entity_id: u8,
 }
 
 const MAX_STREAMING_INTERFACES: usize = 8;
@@ -235,18 +410,18 @@ impl<'a> AudioControlInterfaceDescriptorWriter<'a> {
             position: 0,
             audio_class_version: 0x0100, // TODO un-hardcode this
             streaming_interfaces,
-            next_terminal_id: 1,
+            next_entity_id: 1,
         }
     }
 
-    pub fn alloc_terminal(&mut self) -> Result<TerminalId> {
-        if self.next_terminal_id == 255 {
+    pub fn alloc_entity(&mut self) -> Result<EntityId> {
+        if self.next_entity_id == 255 {
             return Err(UsbError::Unsupported);
         }
 
-        let terminal_id = TerminalId(self.next_terminal_id);
-        self.next_terminal_id += 1;
-        Ok(terminal_id)
+        let entity_id = EntityId(self.next_entity_id);
+        self.next_entity_id += 1;
+        Ok(entity_id)
     }
 
     fn write_into(&self, writer: &mut DescriptorWriter) {
@@ -293,7 +468,27 @@ impl<'a> AudioControlInterfaceDescriptorWriter<'a> {
         Ok(())
     }
 
-    fn ac_interface_clock_source(&mut self) {
+    fn ac_interface_clock_source(
+        &mut self,
+        attributes: ClockAttributes,
+        controls: ClockControls,
+        assoc_terminal_id: Option<EntityId>,
+    ) -> Result<EntityId> {
+        let clock_id = self.alloc_entity()?;
+        self.write(
+            ac_interface_descriptor_subtype::CLOCK_SOURCE,
+            &[
+                clock_id.into(),
+                attributes.0,
+                controls.0,
+                assoc_terminal_id.map_or(0, Into::into),
+                0,
+            ]
+        )?;
+        Ok(clock_id)
+    }
+
+    fn ac_interface_clock_selector(&mut self) {
         todo!()
     }
 
@@ -304,13 +499,13 @@ impl<'a> AudioControlInterfaceDescriptorWriter<'a> {
     fn ac_interface_input_terminal(
         &mut self,
         terminal_type: [u8; 2],
-        assoc_terminal_id: Option<TerminalId>,
-        clock_source_id: Option<TerminalId>,
+        assoc_terminal_id: Option<EntityId>,
+        clock_source_id: Option<EntityId>,
         channels: ChannelConfig,
-        controls: Controls,
+        controls: InputTerminalControls,
         name: Option<StringIndex>,
-    ) -> Result<TerminalId> {
-        let terminal_id = self.alloc_terminal()?;
+    ) -> Result<EntityId> {
+        let terminal_id = self.alloc_entity()?;
         let channel_bytes = channels.channels();
         let controls_bytes = controls.bitmap();
         self.write(
@@ -338,11 +533,14 @@ impl<'a> AudioControlInterfaceDescriptorWriter<'a> {
     fn ac_interface_output_terminal(
         &mut self,
         terminal_type: [u8; 2],
-        assoc_terminal_id: Option<TerminalId>,
-        source_terminal_id: TerminalId,
+        assoc_terminal_id: Option<EntityId>,
+        source_id: EntityId,
+        clock_source_id: EntityId,
+        // TODO make this into a controls type
+        controls: u8,
         name: Option<StringIndex>,
-    ) -> Result<TerminalId> {
-        let terminal_id = self.alloc_terminal()?;
+    ) -> Result<EntityId> {
+        let terminal_id = self.alloc_entity()?;
         self.write(
             ac_interface_descriptor_subtype::OUTPUT_TERMINAL,
             &[
@@ -350,7 +548,9 @@ impl<'a> AudioControlInterfaceDescriptorWriter<'a> {
                 terminal_type[0],
                 terminal_type[1],
                 assoc_terminal_id.map_or(0, |id| id.into()),
-                source_terminal_id.into(),
+                source_id.into(),
+                clock_source_id.into(),
+                controls,
                 name.map_or(0, |id| id.into()),
             ],
         )?;
@@ -367,20 +567,26 @@ impl<'a> AudioControlInterfaceDescriptorWriter<'a> {
 
     fn ac_interface_feature_unit(
         &mut self,
-        source_terminal_id: TerminalId,
-        master_channel_controls: Controls,
-        logical_channel_controls: &[Controls],
-    ) {
-        let terminal_id = self.alloc_terminal()?;
+        source_id: EntityId,
+        master_channel_controls: FeatureUnitControls,
+        //logical_channel_controls: &[FeatureUnitControls],
+        name: Option<StringIndex>,
+    ) -> Result<EntityId> {
+        let unit_id = self.alloc_entity()?;
+        let master_controls: [u8; 4] = master_channel_controls.bitmap();
+        let mut buf: [u8; 2 + 4 + 4 * 2 + 1] = [0; 2 + 4 + 4 * 2 + 1];
+        buf[0] = unit_id.into();
+        buf[1] = source_id.into();
+        buf[2..6].copy_from_slice(&master_controls);
+        // TODO don't assume two channels without logical channel controls
+        buf[6..10].copy_from_slice(&[0,0,0,0]);
+        buf[10..14].copy_from_slice(&[0,0,0,0]);
+        buf[14] = name.map_or(0, Into::into);
         self.write(
             ac_interface_descriptor_subtype::FEATURE_UNIT,
-            &[
-                terminal_id.into(),
-                source_terminal_id.into(),
-                0x01 + logical_channel_controls.len() as u8,
-                master_channel_controls.into(),
-            ],
-        )
+            &buf,
+        )?;
+        Ok(unit_id)
     }
 
     fn ac_interface_effect_unit(&mut self) {

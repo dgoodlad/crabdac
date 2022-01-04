@@ -18,10 +18,12 @@ mod sizes {
 
 mod consts {
     pub const USB_AUDIO_CLASS: u8 = 0x01;
-    // pub const USB_AUDIO_CLASS_SUBCLASS_UNDEFINED: u8 = 0x00;
+    pub const USB_AUDIO_CLASS_SUBCLASS_UNDEFINED: u8 = 0x00;
     pub const USB_AUDIO_CLASS_SUBCLASS_AUDIOCONTROL: u8 = 0x01;
     pub const USB_AUDIO_CLASS_SUBCLASS_AUDIOSTREAMING: u8 = 0x02;
     // pub const USB_AUDIO_CLASS_SUBCLASS_MIDISTREAMING: u8 = 0x03;
+
+    pub const AF_VERSION_02_00: u8 = 0x20;
 }
 
 #[repr(u8)]
@@ -57,15 +59,24 @@ where
     B: UsbBus
 {
     pub fn new(alloc: &'a UsbBusAllocator<B>) -> UsbAudioClass<'a, B> {
-        defmt::debug!("Allocating audio control interface");
+        defmt::info!("Allocating audio control interface");
         let iface_audio_control = alloc.interface();
-        defmt::debug!("Success");
+        defmt::info!("Success");
 
-        defmt::debug!("Allocating audio stream interface");
+        defmt::info!("Allocating audio stream interface");
         let iface_audio_stream = alloc.interface();
-        defmt::debug!("Success");
+        defmt::info!("Success");
 
-        defmt::debug!("Allocating audio IN endpoint");
+        defmt::info!("Allocating audio OUT endpoint");
+        let ep_audio_out = alloc.isochronous(
+                usb_device::endpoint::IsochronousSynchronizationType::Asynchronous,
+                usb_device::endpoint::IsochronousUsageType::Data,
+                sizes::AUDIO_STREAM_BUFFER as u16,
+                0x01
+            );
+        defmt::info!("Success");
+
+        defmt::info!("Allocating audio IN endpoint");
         let ep_audio_fb_in = alloc.isochronous(
                 usb_device::endpoint::IsochronousSynchronizationType::NoSynchronization,
                 usb_device::endpoint::IsochronousUsageType::Feedback,
@@ -84,16 +95,7 @@ where
                 // bRefresh value is the exponent, which is 10 - P = 10 - 8 = 2
                 0x02
             );
-        defmt::debug!("Success");
-
-        defmt::debug!("Allocating audio OUT endpoint");
-        let ep_audio_out = alloc.isochronous(
-                usb_device::endpoint::IsochronousSynchronizationType::Asynchronous,
-                usb_device::endpoint::IsochronousUsageType::Data,
-                sizes::AUDIO_STREAM_BUFFER as u16,
-                0x01
-            );
-        defmt::debug!("Success");
+        defmt::info!("Success");
 
         Self {
             iface_audio_control,
@@ -128,7 +130,7 @@ where
     pub fn write_audio_feedback(&mut self, counter: &ClockCounter) -> Result<usize, UsbError> {
         let fractional_value = counter.current_rate();
         let buffer = &fractional_value.to_le_bytes()[0..3];
-        defmt::debug!("usb audio :: feedback {:?} {:#x}", fractional_value, buffer);
+        defmt::info!("usb audio :: feedback {:?} {:#x}", fractional_value, buffer);
         self.ep_audio_stream_fb.write(buffer).and_then(|x| {
             self.audio_feedback_needed = false;
             Ok(x)
@@ -138,11 +140,13 @@ where
     fn enable_stream(&mut self) {
         defmt::info!("Enabling audio stream");
         self.enable_disable.replace(StreamingState::Enabled);
+        self.audio_feedback_needed = true;
     }
 
     fn disable_stream(&mut self) {
         defmt::info!("Disabling audio stream");
         self.enable_disable.replace(StreamingState::Disabled);
+        self.audio_feedback_needed = false;
     }
 }
 
@@ -157,19 +161,19 @@ impl<B: UsbBus> UsbClass<B> for UsbAudioClass<'_, B> {
             self.iface_audio_control,
             0x02,
             consts::USB_AUDIO_CLASS,
-            consts::USB_AUDIO_CLASS_SUBCLASS_AUDIOCONTROL,
-            0x00,
+            consts::USB_AUDIO_CLASS_SUBCLASS_UNDEFINED,
+            consts::AF_VERSION_02_00,
         )?;
         // Control interface; uses the default 0 endpoint for audio control requests
         writer.interface(
             self.iface_audio_control,
             consts::USB_AUDIO_CLASS,
             consts::USB_AUDIO_CLASS_SUBCLASS_AUDIOCONTROL,
-            0x00
+            0x20
         )?;
         writer.write(0x24, &[
             0x01, // HEADER
-            0x00, 0x01, // Revision of class specification - 1.0
+            0x00, 0x02, // Revision of class specification - 2.0
             0x27, 0x00, // Total size of class-specific descriptors
             0x01,   // 1 streaming interface
             //0x01,   // AudioStreaming interface 1 belongs to this AudioControl interface
