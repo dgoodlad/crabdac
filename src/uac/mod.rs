@@ -2,6 +2,7 @@ use usb_device::class_prelude::*;
 use as_slice::AsMutSlice;
 
 mod descriptors;
+mod simple_stereo_output;
 
 const CHANNELS: u32 = 2;
 const SAMPLING_RATE: u32 = 96_000;

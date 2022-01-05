@@ -209,6 +209,28 @@ pub mod terminal_type {
     //TODO embedded function terminal types (0x07XX)
 }
 
+#[allow(dead_code)]
+pub mod format_type_codes {
+    pub const FORMAT_TYPE_UNDEFINED: u8 = 0x00;
+    pub const FORMAT_TYPE_I: u8 = 0x01;
+    pub const FORMAT_TYPE_II: u8 = 0x02;
+    pub const FORMAT_TYPE_III: u8 = 0x03;
+    pub const FORMAT_TYPE_IV: u8 = 0x04;
+    pub const EXT_FORMAT_TYPE_I: u8 = 0x81;
+    pub const EXT_FORMAT_TYPE_II: u8 = 0x82;
+    pub const EXT_FORMAT_TYPE_III: u8 = 0x83;
+}
+
+#[allow(dead_code)]
+pub mod audio_format_type_1_bit_allocations {
+    pub const PCM: u32 = 1 << 0;
+    pub const PCM8: u32 = 1 << 1;
+    pub const IEEE_FLOAT: u32 = 1 << 2;
+    pub const ALAW: u32 = 1 << 3;
+    pub const MULAW: u32 = 1 << 4;
+    pub const TYPE_I_RAW_DATA: u32 = 1 << 31;
+}
+
 #[derive(Copy, Clone, Eq, PartialEq)]
 pub struct EntityId(u8);
 
@@ -242,7 +264,7 @@ impl ChannelConfig {
         self.num_channels
     }
 
-    fn add_channel(&mut self, n: u8) -> &mut Self {
+    fn add_channel(mut self, n: u8) -> Self {
         if self.channels & 1 << n > 0 {
             return self;
         }
@@ -252,10 +274,10 @@ impl ChannelConfig {
         self
     }
 
-    pub fn front_left(&mut self) -> &mut Self {
+    pub fn front_left(mut self) -> ChannelConfig {
         self.add_channel(0)
     }
-    pub fn front_right(&mut self) -> &mut Self {
+    pub fn front_right(mut self) -> ChannelConfig {
         self.add_channel(1)
     }
 }
@@ -327,19 +349,19 @@ impl FeatureUnitControls {
     }
 
     fn set_control(
-        &mut self,
+        mut self,
         bit_offset: usize,
         capabilities: ControlCapabilities
-    ) -> &mut Self {
+    ) -> FeatureUnitControls {
         self.0 |= (capabilities as u32) << bit_offset;
         self
     }
 
-    pub fn mute(&mut self, capabilities: ControlCapabilities) -> &mut Self {
+    pub fn mute(mut self, capabilities: ControlCapabilities) -> FeatureUnitControls {
         self.set_control(0, capabilities)
     }
 
-    pub fn volume(&mut self, capabilities: ControlCapabilities) -> &mut Self {
+    pub fn volume(mut self, capabilities: ControlCapabilities) -> FeatureUnitControls {
         self.set_control(2, capabilities)
     }
 
@@ -372,6 +394,10 @@ impl ClockControls {
         ClockControls(0)
     }
 
+    pub fn bitmap(&self) -> u8 {
+        self.0
+    }
+
     fn set_control(
         &mut self,
         bit_offset: usize,
@@ -394,22 +420,17 @@ pub struct AudioControlInterfaceDescriptorWriter<'a> {
     buf: &'a mut [u8],
     position: usize,
     audio_class_version: u16,
-    streaming_interfaces: &'a [InterfaceNumber],
     next_entity_id: u8,
 }
-
-const MAX_STREAMING_INTERFACES: usize = 8;
 
 impl<'a> AudioControlInterfaceDescriptorWriter<'a> {
     pub fn new(
         buf: &'a mut [u8],
-        streaming_interfaces: &'a [InterfaceNumber],
     ) -> AudioControlInterfaceDescriptorWriter<'a> {
         AudioControlInterfaceDescriptorWriter {
             buf,
-            position: 0,
-            audio_class_version: 0x0100, // TODO un-hardcode this
-            streaming_interfaces,
+            position: 7,
+            audio_class_version: 0x0200, // TODO un-hardcode this
             next_entity_id: 1,
         }
     }
@@ -424,26 +445,18 @@ impl<'a> AudioControlInterfaceDescriptorWriter<'a> {
         Ok(entity_id)
     }
 
-    fn write_into(&self, writer: &mut DescriptorWriter) {
-        let header_len = 9;
-        let length = (self.position + header_len).to_le_bytes();
+    pub fn write_into(&mut self, writer: &mut DescriptorWriter) -> Result<()> {
+        let header_len = 7;
+        let length: [u8; 2] = (self.position as u16 + header_len as u16).to_le_bytes();
         let bcd_revision = self.audio_class_version.to_le_bytes();
-        let mut buf: [u8; 6 + MAX_STREAMING_INTERFACES] = [0; 6 + MAX_STREAMING_INTERFACES];
 
-        buf[0] = ac_interface_descriptor_subtype::HEADER;
-        buf[1..=2].copy_from_slice(&bcd_revision);
-        buf[3..=4].copy_from_slice(&length);
-        buf[5] = self.streaming_interfaces.len() as u8;
+        self.buf[0] = ac_interface_descriptor_subtype::HEADER;
+        self.buf[1..=2].copy_from_slice(&bcd_revision);
+        self.buf[3] = super::descriptors::audio_function_category::DESKTOP_SPEAKER;
+        self.buf[4..=5].copy_from_slice(&length);
+        self.buf[6] = 0x00; // No special controls
 
-        // TODO this is gross, why isn't there an easy way to map this?
-        //buf[6..].copy_from_slice(self.streaming_interfaces.iter().map(|i| u8::from(*i)).collect())
-        let mut pos: usize = 6;
-        for i in self.streaming_interfaces {
-            buf[pos] = (*i).into();
-            pos += 1;
-        }
-
-        writer.write(descriptor_type::CS_INTERFACE, &buf);
+        writer.write(descriptor_type::CS_INTERFACE, &self.buf)
     }
 
     fn write(&mut self, descriptor_subtype: u8, descriptor: &[u8]) -> Result<()> {
@@ -468,36 +481,37 @@ impl<'a> AudioControlInterfaceDescriptorWriter<'a> {
         Ok(())
     }
 
-    fn ac_interface_clock_source(
+    pub fn ac_interface_clock_source(
         &mut self,
+        id: EntityId,
         attributes: ClockAttributes,
         controls: ClockControls,
         assoc_terminal_id: Option<EntityId>,
     ) -> Result<EntityId> {
-        let clock_id = self.alloc_entity()?;
         self.write(
             ac_interface_descriptor_subtype::CLOCK_SOURCE,
             &[
-                clock_id.into(),
+                id.into(),
                 attributes.0,
                 controls.0,
                 assoc_terminal_id.map_or(0, Into::into),
                 0,
             ]
         )?;
-        Ok(clock_id)
+        Ok(id)
     }
 
-    fn ac_interface_clock_selector(&mut self) {
+    pub fn ac_interface_clock_selector(&mut self) {
         todo!()
     }
 
-    fn ac_interface_clock_multiplier(&mut self) {
+    pub fn ac_interface_clock_multiplier(&mut self) {
         todo!()
     }
 
-    fn ac_interface_input_terminal(
+    pub fn ac_interface_input_terminal(
         &mut self,
+        terminal_id: EntityId,
         terminal_type: [u8; 2],
         assoc_terminal_id: Option<EntityId>,
         clock_source_id: Option<EntityId>,
@@ -505,7 +519,6 @@ impl<'a> AudioControlInterfaceDescriptorWriter<'a> {
         controls: InputTerminalControls,
         name: Option<StringIndex>,
     ) -> Result<EntityId> {
-        let terminal_id = self.alloc_entity()?;
         let channel_bytes = channels.channels();
         let controls_bytes = controls.bitmap();
         self.write(
@@ -530,8 +543,9 @@ impl<'a> AudioControlInterfaceDescriptorWriter<'a> {
         Ok(terminal_id)
     }
 
-    fn ac_interface_output_terminal(
+    pub fn ac_interface_output_terminal(
         &mut self,
+        terminal_id: EntityId,
         terminal_type: [u8; 2],
         assoc_terminal_id: Option<EntityId>,
         source_id: EntityId,
@@ -540,7 +554,6 @@ impl<'a> AudioControlInterfaceDescriptorWriter<'a> {
         controls: u8,
         name: Option<StringIndex>,
     ) -> Result<EntityId> {
-        let terminal_id = self.alloc_entity()?;
         self.write(
             ac_interface_descriptor_subtype::OUTPUT_TERMINAL,
             &[
@@ -557,22 +570,22 @@ impl<'a> AudioControlInterfaceDescriptorWriter<'a> {
         Ok(terminal_id)
     }
 
-    fn ac_interface_mixer_unit(&mut self) {
+    pub fn ac_interface_mixer_unit(&mut self) {
         todo!()
     }
 
-    fn ac_interface_selector_unit(&mut self) {
+    pub fn ac_interface_selector_unit(&mut self) {
         todo!()
     }
 
-    fn ac_interface_feature_unit(
+    pub fn ac_interface_feature_unit(
         &mut self,
+        unit_id: EntityId,
         source_id: EntityId,
         master_channel_controls: FeatureUnitControls,
         //logical_channel_controls: &[FeatureUnitControls],
         name: Option<StringIndex>,
     ) -> Result<EntityId> {
-        let unit_id = self.alloc_entity()?;
         let master_controls: [u8; 4] = master_channel_controls.bitmap();
         let mut buf: [u8; 2 + 4 + 4 * 2 + 1] = [0; 2 + 4 + 4 * 2 + 1];
         buf[0] = unit_id.into();
@@ -589,15 +602,15 @@ impl<'a> AudioControlInterfaceDescriptorWriter<'a> {
         Ok(unit_id)
     }
 
-    fn ac_interface_effect_unit(&mut self) {
+    pub fn ac_interface_effect_unit(&mut self) {
         todo!()
     }
 
-    fn ac_interface_processing_unit(&mut self) {
+    pub fn ac_interface_processing_unit(&mut self) {
         todo!()
     }
 
-    fn ac_interface_extension_unit(&mut self) {
+    pub fn ac_interface_extension_unit(&mut self) {
         todo!()
     }
 }
