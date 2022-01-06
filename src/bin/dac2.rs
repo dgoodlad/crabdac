@@ -255,7 +255,7 @@ mod app {
 
     #[task(binds = OTG_HS, local = [producer, usb_dev, usb_audio], shared = [feedback_clock_counter])]
     fn usb_handler(cx: usb_handler::Context) {
-        let producer = cx.local.producer;
+        let producer: &mut bbqueue::framed::FrameProducer<'static, BUFFER_SIZE> = cx.local.producer;
         let usb_dev: &mut UsbDevice<UsbBusType> = cx.local.usb_dev;
         let usb_audio: &mut SimpleStereoOutput<UsbBusType> = cx.local.usb_audio;
 
@@ -264,7 +264,7 @@ mod app {
                 defmt::trace!("usb_handler :: requesting frame up to {:#x} bytes", MAX_FRAME_SIZE);
                 let mut grant = match producer.grant(MAX_FRAME_SIZE) {
                     Ok(grant) => grant,
-                    Err(_) => { defmt::info!("Dropped USB Frame"); continue; }
+                    Err(_) => { defmt::debug!("Dropped USB Frame"); continue; }
                 };
 
                 let bytes_received = usb_audio.read_audio_data(&mut grant).unwrap();
