@@ -11,13 +11,13 @@ mod app {
     use crabdac::timer::UsbAudioFrequencyFeedback;
     use crabdac::uac;
     use crabdac::uac::StreamingState;
+    use crabdac::uac::simple_stereo_output::SimpleStereoOutput;
     use hal::dma::StreamX;
+    use hal::gpio::gpiob::PB13;
     use hal::gpio::gpiob::PB8;
 
     use bbqueue;
     use bytemuck::*;
-    use crabdac::uac::UsbAudioClass;
-    use hal::gpio::Input;
     use stm32_i2s_v12x::MasterConfig;
     use stm32_i2s_v12x::Polarity;
     use stm32_i2s_v12x::TransmitMode;
@@ -31,7 +31,6 @@ mod app {
     use stm32f4xx_hal::dma::config::DmaConfig;
     use stm32f4xx_hal::gpio::Alternate;
     use stm32f4xx_hal::gpio::PushPull;
-    use stm32f4xx_hal::gpio::gpioa::PA4;
     use stm32f4xx_hal::gpio::gpioa::PA15;
     use stm32f4xx_hal::gpio::gpioc::PC7;
     use stm32f4xx_hal::gpio::gpioc::PC10;
@@ -66,7 +65,7 @@ mod app {
         consumer: bbqueue::framed::FrameConsumer<'static, BUFFER_SIZE>,
         read_grant: Option<bbqueue::framed::FrameGrantR<'static, BUFFER_SIZE>>,
         usb_dev: UsbDevice<'static, UsbBusType>,
-        usb_audio: UsbAudioClass<'static, UsbBusType>,
+        usb_audio: SimpleStereoOutput<'static, UsbBusType>,
         dma1_stream_5: Option<StreamX<pac::DMA1, 5>>,
         i2s: Option<I2sDevice>,
         feedback_timer: UsbAudioFrequencyFeedback<pac::TIM2, PB8<Alternate<PushPull, 1>>>,
@@ -86,8 +85,8 @@ mod app {
         let rcc = cx.device.RCC.constrain();
         let clocks = rcc.cfgr
             .use_hse(8.mhz())
-            .sysclk(180.mhz())
-            .hclk(180.mhz())
+            .sysclk(96.mhz())
+            .hclk(96.mhz())
             .pclk1(45.mhz())
             .pclk2(90.mhz())
             .i2s_apb1_clk(98400.khz())
@@ -129,16 +128,23 @@ mod app {
             hclk: clocks.hclk(),
         };
 
+        cortex_m::asm::delay(168000000);
+
         *cx.local.usb_bus = Some(UsbBus::new(usb, cx.local.ep_memory));
 
-        let usb_audio = UsbAudioClass::new(cx.local.usb_bus.as_ref().unwrap());
+        let usb_audio = SimpleStereoOutput::new(
+            cx.local.usb_bus.as_ref().unwrap(),
+            96000,
+            4,
+            24,
+        );
 
         defmt::debug!("USB Audio device created");
 
         let usb_dev = UsbDeviceBuilder::new(cx.local.usb_bus.as_ref().unwrap(), UsbVidPid(0x1209, 0x0001))
             .manufacturer("Crabs Pty Ltd.")
             .product("CrabDAC")
-            .serial_number("TEST")
+            .serial_number("420.69")
             .composite_with_iads()
             .max_packet_size_0(8)
             .self_powered(true)
@@ -248,10 +254,10 @@ mod app {
     }
 
     #[task(binds = OTG_HS, local = [producer, usb_dev, usb_audio], shared = [feedback_clock_counter])]
-    fn usb_handler(mut cx: usb_handler::Context) {
+    fn usb_handler(cx: usb_handler::Context) {
         let producer = cx.local.producer;
-        let usb_dev = cx.local.usb_dev;
-        let usb_audio: &mut UsbAudioClass<UsbBusType> = cx.local.usb_audio;
+        let usb_dev: &mut UsbDevice<UsbBusType> = cx.local.usb_dev;
+        let usb_audio: &mut SimpleStereoOutput<UsbBusType> = cx.local.usb_audio;
 
         while usb_dev.poll(&mut [usb_audio]) {
             if usb_audio.audio_data_available {
@@ -261,31 +267,31 @@ mod app {
                     Err(_) => { defmt::info!("Dropped USB Frame"); continue; }
                 };
 
-                let bytes_received = usb_audio.read_audio_stream(&mut grant).unwrap();
+                let bytes_received = usb_audio.read_audio_data(&mut grant).unwrap();
                 grant.commit(bytes_received);
 
                 defmt::trace!("usb_handler :: committed {:#x} bytes", bytes_received);
             }
 
-            if usb_audio.audio_feedback_needed {
-                cx.shared.feedback_clock_counter.lock(|counter| {
-                    usb_audio.write_audio_feedback(counter).unwrap_or_else(|_e| {
-                        defmt::debug!("usb_handler :: feedback skipped, would block");
-                        0
-                    });
-                    counter.clear();
-                });
-            }
+            //if usb_audio.audio_feedback_needed {
+            //    cx.shared.feedback_clock_counter.lock(|counter| {
+            //        usb_audio.write_audio_feedback(counter).unwrap_or_else(|_e| {
+            //            defmt::info!("usb_handler :: feedback skipped, would block");
+            //            0
+            //        });
+            //        counter.clear();
+            //    });
+            //}
 
-            usb_audio.enable_disable.take().map(|b| {
-                if b == StreamingState::Enabled {
-                    usb_audio.audio_feedback_needed = true;
-                }
-                match toggle_i2s_dma::spawn(b) {
-                    Ok(_) => defmt::info!("Toggled I2S DMA"),
-                    Err(_) => defmt::info!("Failed to toggle I2s DMA")
-                }
-            });
+            //usb_audio.enable_disable.take().map(|b| {
+            //    if b == StreamingState::Enabled {
+            //        usb_audio.audio_feedback_needed = true;
+            //    }
+            //    match toggle_i2s_dma::spawn(b) {
+            //        Ok(_) => defmt::info!("Toggled I2S DMA"),
+            //        Err(_) => defmt::info!("Failed to toggle I2s DMA")
+            //    }
+            //});
         }
     }
 

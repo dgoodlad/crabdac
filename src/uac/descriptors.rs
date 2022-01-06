@@ -3,6 +3,8 @@ use usb_device::{
     descriptor, Result, UsbError,
 };
 
+use self::{descriptor_type::CS_INTERFACE, ac_interface_descriptor_subtype::HEADER, audio_function_category::DESKTOP_SPEAKER};
+
 /// Audio Function Class Code
 /// USB Audio 2.0 Spec Table A-1
 #[allow(dead_code)]
@@ -441,6 +443,7 @@ impl AudioControlAllocator {
 pub struct AudioControlInterfaceDescriptorWriter<'a> {
     buf: &'a mut [u8],
     position: usize,
+    num_descriptors: usize,
     audio_class_version: u16,
 }
 
@@ -450,23 +453,38 @@ impl<'a> AudioControlInterfaceDescriptorWriter<'a> {
     ) -> AudioControlInterfaceDescriptorWriter<'a> {
         AudioControlInterfaceDescriptorWriter {
             buf,
-            position: 7,
+            position: 0,
+            num_descriptors: 0,
             audio_class_version: 0x0200, // TODO un-hardcode this
         }
     }
 
     pub fn write_into(&mut self, writer: &mut DescriptorWriter) -> Result<()> {
-        let header_len = 7;
+        let header_len = 9;
         let length: [u8; 2] = (self.position as u16 + header_len as u16).to_le_bytes();
         let bcd_revision = self.audio_class_version.to_le_bytes();
 
-        self.buf[0] = ac_interface_descriptor_subtype::HEADER;
-        self.buf[1..=2].copy_from_slice(&bcd_revision);
-        self.buf[3] = super::descriptors::audio_function_category::DESKTOP_SPEAKER;
-        self.buf[4..=5].copy_from_slice(&length);
-        self.buf[6] = 0x00; // No special controls
+        writer.write(CS_INTERFACE, &[
+            HEADER,
+            bcd_revision[0],
+            bcd_revision[1],
+            DESKTOP_SPEAKER,
+            length[0],
+            length[1],
+            0x00, // No interface controls
+        ]);
 
-        writer.write(descriptor_type::CS_INTERFACE, &self.buf)
+        let mut position: usize = 0;
+        for _ in 0..self.num_descriptors {
+            let length = self.buf[position] as usize;
+            let descriptor = &self.buf[position..position + length];
+            writer.write(descriptor[1], &descriptor[2..])?;
+            position += length;
+        }
+
+        Ok(())
+
+        //writer.write(descriptor_type::CS_INTERFACE, &self.buf)
     }
 
     fn write(&mut self, descriptor_subtype: u8, descriptor: &[u8]) -> Result<()> {
@@ -479,7 +497,7 @@ impl<'a> AudioControlInterfaceDescriptorWriter<'a> {
         }
 
         self.buf[self.position] = (length + leading_bytes) as u8;
-        self.buf[self.position + 1] = descriptor::descriptor_type::INTERFACE;
+        self.buf[self.position + 1] = CS_INTERFACE;
         self.buf[self.position + 2] = descriptor_subtype;
 
         let start = self.position + leading_bytes;
@@ -487,6 +505,8 @@ impl<'a> AudioControlInterfaceDescriptorWriter<'a> {
         self.buf[start..start + length].copy_from_slice(descriptor);
 
         self.position = start + length;
+
+        self.num_descriptors += 1;
 
         Ok(())
     }
@@ -561,7 +581,7 @@ impl<'a> AudioControlInterfaceDescriptorWriter<'a> {
         source_id: EntityId,
         clock_source_id: EntityId,
         // TODO make this into a controls type
-        controls: u8,
+        controls: u16,
         name: Option<StringIndex>,
     ) -> Result<EntityId> {
         self.write(
@@ -573,7 +593,7 @@ impl<'a> AudioControlInterfaceDescriptorWriter<'a> {
                 assoc_terminal_id.map_or(0, |id| id.into()),
                 source_id.into(),
                 clock_source_id.into(),
-                controls,
+                controls.to_le_bytes()[0], controls.to_le_bytes()[1],
                 name.map_or(0, |id| id.into()),
             ],
         )?;

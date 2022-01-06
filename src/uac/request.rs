@@ -1,11 +1,12 @@
 use core::convert::TryFrom;
 
+use defmt::Format;
 use usb_device::{UsbDirection, control::{Recipient, Request}, UsbError, class_prelude::InterfaceNumber};
 
 use super::descriptors::{request_codes::{CUR, RANGE, MEM}, EntityId};
 
 #[repr(u8)]
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Copy, Clone, Eq, PartialEq, Format)]
 pub enum GetOrSet {
     Set = 0b00000000,
     Get = 0b10000000,
@@ -21,7 +22,7 @@ impl From<UsbDirection> for GetOrSet {
 }
 
 #[repr(u8)]
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Copy, Clone, Eq, PartialEq, Format)]
 pub enum Target {
     Interface(u8, Option<u8>),
     Endpoint(u8),
@@ -44,7 +45,7 @@ impl Target {
 }
 
 #[repr(u8)]
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Copy, Clone, Eq, PartialEq, Format)]
 pub enum RequestCode {
     Cur = super::descriptors::request_codes::CUR,
     Range = super::descriptors::request_codes::RANGE,
@@ -64,7 +65,7 @@ impl TryFrom<u8> for RequestCode {
     }
 }
 
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Copy, Clone, Eq, PartialEq, Format)]
 pub struct ControlRequest {
     pub direction: GetOrSet,
     pub target: Target,

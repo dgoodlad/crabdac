@@ -1,5 +1,9 @@
-use usb_device::{class_prelude::*, descriptor::{descriptor_type::{INTERFACE, ENDPOINT}, self}, endpoint::{Endpoint, EndpointDirection, Out, In}};
-use crate::uac::descriptors::AudioControlAllocator;
+use usb_device::{
+    class_prelude::*,
+    descriptor::descriptor_type::{INTERFACE, ENDPOINT},
+    endpoint::{Endpoint, EndpointDirection, Out, In}
+};
+use crate::uac::descriptors::{AudioControlAllocator, descriptor_type::CS_INTERFACE};
 
 use super::{descriptors::{
     self,
@@ -21,7 +25,7 @@ use super::{descriptors::{
     audio_format_type_1_bit_allocations::PCM,
     descriptor_type::CS_ENDPOINT,
     endpoint_descriptor_subtypes::EP_GENERAL, request_codes::{CUR, RANGE}, audiostreaming_interface_control_selectors::{AS_VAL_ALT_SETTINGS_CONTROL, AS_AUDIO_DATA_FORMAT_CONTROL, AS_ACT_ALT_SETTING_CONTROL}, EntityId
-}, request::ControlRequest};
+}, request::ControlRequest, ClockCounter};
 
 pub struct SimpleStereoOutput<'a, B: UsbBus> {
     if_audio_control: InterfaceNumber,
@@ -44,6 +48,7 @@ pub struct SimpleStereoOutput<'a, B: UsbBus> {
     volume: u8,
 
     alt_setting: u8,
+    pub audio_data_available: bool,
 }
 
 impl<'a, B> SimpleStereoOutput<'a, B>
@@ -117,15 +122,22 @@ where
             input_terminal,
             feature_unit,
             output_terminal,
-            alt_setting: 0,
             mute: false,
             volume: 100,
+            alt_setting: 0,
+            audio_data_available: false,
         }
     }
 
     pub fn read_audio_data(&mut self, buffer: &mut [u8]) -> Result<usize, UsbError> {
         assert!(buffer.len() >= self.audio_data_buffer_size);
         self.ep_audio_data.read(buffer)
+    }
+
+    pub fn write_audio_feedback(&mut self, counter: &ClockCounter) -> Result<usize, UsbError> {
+        let fractional_value = counter.current_rate();
+        let buffer: &[u8] = &fractional_value.to_le_bytes()[0..3];
+        self.ep_feedback.write(buffer)
     }
 }
 
@@ -143,6 +155,9 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
         // since the clock domain of this whole function is tied to the I2S
         // clock
 
+        defmt::info!("usb audio :: get configuration descriptors");
+
+        defmt::info!("usb audio :: iad");
         // Interface Association Descriptor
         writer.iad(
             self.if_audio_control,
@@ -152,6 +167,7 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
             audio_function_protocol::AF_VERSION_02_00
         )?;
         // Standard AC Interface Descriptor
+        defmt::info!("usb audio :: interface");
         writer.interface(
             self.if_audio_control,
             audio_interface_class::AUDIO,
@@ -159,6 +175,7 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
             audio_interface_protocol::IP_VERSION_02_00
         )?;
         // Class-Specific AC Interface Descriptor
+        defmt::info!("usb audio :: cs interface");
         let mut buf: [u8; 64] = [0; 64];
         let mut ac_interface_descriptor_writer = AudioControlInterfaceDescriptorWriter::new(
             &mut buf,
@@ -195,17 +212,21 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
             0x00, // No output terminal controls
             None,
         )?;
+        defmt::info!("usb audio :: cs interface write_into");
         ac_interface_descriptor_writer.write_into(writer)?;
+        defmt::info!("usb audio :: streaming interface");
         writer.interface(
             self.if_audio_stream,
             audio_interface_class::AUDIO,
             audio_interface_subclass::AUDIOSTREAMING,
             audio_interface_protocol::IP_VERSION_02_00
         )?;
+        defmt::info!("usb audio :: streaming interface alt");
         writer.interface_alt(self.if_audio_stream, 1, AUDIO, AUDIOSTREAMING, IP_VERSION_02_00, None)?;
         let bm_formats: u32 = PCM;
         let channels = ChannelConfig::new(None).front_left().front_right().channels();
-        writer.write(INTERFACE, &[
+        defmt::info!("usb audio :: streaming interface cs");
+        writer.write(CS_INTERFACE, &[
             AS_GENERAL,
             self.input_terminal.into(),
             0x00, // TODO set these controls properly
@@ -222,22 +243,27 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
             0x00, // Channel Names
         ])?;
         // 24-bit audio samples in 4-byte subslots
-        writer.write(INTERFACE, &[
+        defmt::info!("usb audio :: streaming interface format");
+        writer.write(CS_INTERFACE, &[
             FORMAT_TYPE,
             FORMAT_TYPE_I,
             4,
             24,
-        ])?;
+        ]).unwrap();
+        defmt::info!("usb audio :: endpoint audio data");
         writer.endpoint(&self.ep_audio_data)?;
-        writer.write(ENDPOINT, &[
-            CS_ENDPOINT,
+        writer.write(CS_ENDPOINT, &[
             EP_GENERAL,
             0x00, // bit 7 = 0: allow packets shorter than max
             0x00, // no controls (TODO maybe add over-/under-run indicators)
             0x00, // lock delay units is ignored
             0x00, 0x00 // lock delay is also ignored
         ])?;
+        defmt::info!("usb audio :: endpoint feedback");
         writer.endpoint(&self.ep_feedback)?;
+
+        defmt::info!("usb audio :: get configuration descriptors DONE");
+
         Ok(())
     }
 
@@ -251,7 +277,25 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
     fn poll(&mut self) {}
 
     fn control_out(&mut self, xfer: ControlOut<B>) {
-        let _ = xfer;
+        let request = xfer.request();
+
+        match request.request_type {
+            control::RequestType::Standard => {
+                match request.request {
+                    control::Request::SET_INTERFACE => {
+                        if request.index as u8 == self.if_audio_stream.into() {
+                            match request.value {
+                                0 => xfer.accept().map(|_| self.alt_setting = 0).unwrap(),
+                                1 => xfer.accept().map(|_| self.alt_setting = 1).unwrap(),
+                                _ => { xfer.reject().unwrap(); },
+                            }
+                        }
+                    },
+                    _ => { return; },
+                }
+            }
+            _ => { return; }
+        }
     }
 
     fn control_in(&mut self, xfer: ControlIn<B>) {
@@ -281,6 +325,8 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
                     }
                 };
 
+                defmt::info!("usb audio :: control in cs :: {:?}", cs_request);
+
                 match cs_request.target {
                     super::request::Target::Interface(interface_number, entity_id) => {
                         if interface_number == self.if_audio_control.into() {
@@ -308,7 +354,7 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
                                     0x01,
                                     // Bitmask of current valid alternate settings
                                     0b00000011,
-                                ])
+                                ]).unwrap();
                             }
                         } else {
                             return xfer.reject().unwrap();
@@ -317,39 +363,6 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
                     super::request::Target::Endpoint(endpoint_number) => {
 
                     },
-                }
-
-                match request.recipient {
-                    control::Recipient::Interface => {
-                        let cs: u8 = (request.value >> 8 & 0xff) as u8;
-                        let cn: u8 = (request.value & 0xff) as u8;
-                        let interface: u8 = (request.index & 0xff) as u8;
-                        let entity_id: u8 = (request.index >> 8 & 0xff) as u8;
-
-                        if interface == self.if_audio_control.into() {
-                            if entity_id == 0 {
-                                // targeting the interface itself
-                            } else {
-                                // targeting a clock/terminal/unit
-                            }
-                        } else if interface == self.if_audio_stream.into() {
-                            if cs == AS_VAL_ALT_SETTINGS_CONTROL {
-                                assert!(request.request == CUR);
-                                xfer.accept_with(&[0x01, 0b11]).unwrap();
-                                return;
-                            } else if cs == AS_AUDIO_DATA_FORMAT_CONTROL {
-                                assert!(request.request == CUR);
-                                xfer.accept_with(&PCM.to_le_bytes()).unwrap();
-                                return;
-                            }
-                        } else {
-                            xfer.reject().unwrap();
-                            return;
-                        }
-                    },
-                    control::Recipient::Endpoint => {
-                    },
-                    _ => { return; }
                 }
             }
         }
@@ -360,7 +373,9 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
     }
 
     fn endpoint_out(&mut self, addr: EndpointAddress) {
-        let _ = addr;
+        if addr == self.ep_audio_data.address() {
+            self.audio_data_available = true;
+        }
     }
 
     fn endpoint_in_complete(&mut self, addr: EndpointAddress) {
