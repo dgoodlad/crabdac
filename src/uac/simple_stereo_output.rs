@@ -1,9 +1,10 @@
+use bytemuck::try_cast;
 use usb_device::{
     class_prelude::*,
     descriptor::descriptor_type::{INTERFACE, ENDPOINT},
     endpoint::{Endpoint, EndpointDirection, Out, In}
 };
-use crate::uac::descriptors::{AudioControlAllocator, descriptor_type::CS_INTERFACE};
+use crate::uac::{descriptors::{AudioControlAllocator, descriptor_type::CS_INTERFACE, feature_unit_control_selector::{FU_MUTE_CONTROL, FU_VOLUME_CONTROL}, clock_source_control_selectors}, request::{RequestCode, Target}};
 
 use super::{descriptors::{
     self,
@@ -45,7 +46,7 @@ pub struct SimpleStereoOutput<'a, B: UsbBus> {
     output_terminal: EntityId,
 
     mute: bool,
-    volume: u8,
+    volume: u16,
 
     alt_setting: u8,
     pub audio_data_available: bool,
@@ -123,7 +124,7 @@ where
             feature_unit,
             output_terminal,
             mute: false,
-            volume: 100,
+            volume: 0x0000,
             alt_setting: 0,
             audio_data_available: false,
         }
@@ -131,6 +132,8 @@ where
 
     pub fn read_audio_data(&mut self, buffer: &mut [u8]) -> Result<usize, UsbError> {
         assert!(buffer.len() >= self.audio_data_buffer_size);
+        assert!(self.audio_data_available);
+        self.audio_data_available = false;
         self.ep_audio_data.read(buffer)
     }
 
@@ -293,7 +296,51 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
                     },
                     _ => { return; },
                 }
-            }
+            },
+            control::RequestType::Class => {
+                let cs_request = match ControlRequest::parse(request) {
+                    Ok(r) => r,
+                    Err(_) => {
+                        defmt::warn!("usb audio :: Failed to parse class-specific request");
+                        return xfer.reject().unwrap();
+                    }
+                };
+
+                defmt::info!("usb audio :: control out cs :: {:?}", cs_request);
+
+                match cs_request.target {
+                    Target::Interface(interface_number, entity_id) => {
+                        if interface_number == self.if_audio_control.into() {
+                            defmt::info!("usb audio :: control out cs :: audio control interface");
+                            match entity_id {
+                                None => {
+                                    // Control request directed at the interface itself
+                                    return xfer.reject().unwrap();
+                                },
+                                Some(entity_id) => {
+                                    defmt::info!("usb audio :: control out cs :: audio control entity {:?}", entity_id);
+                                    if entity_id == self.feature_unit.into() {
+                                        if cs_request.control_selector == FU_MUTE_CONTROL {
+                                            defmt::info!("usb audio :: Set Mute = {:?}", xfer.data());
+                                            self.mute = xfer.data()[0] != 0;
+                                            return xfer.accept().unwrap();
+                                        } else if cs_request.control_selector == FU_VOLUME_CONTROL {
+                                            defmt::info!("usb audio :: Set Volume = {:?}", xfer.data());
+                                            let data = xfer.data();
+                                            self.volume = data[0] as u16 + (data[1] as u16) << 8;
+                                            return xfer.accept().unwrap();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    Target::Endpoint(endpoint_number) => {
+                        defmt::info!("usb audio :: control out cs :: endpoint number {:?}", endpoint_number);
+                        return xfer.accept().unwrap();
+                    }
+                }
+            },
             _ => { return; }
         }
     }
@@ -330,17 +377,51 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
                 match cs_request.target {
                     super::request::Target::Interface(interface_number, entity_id) => {
                         if interface_number == self.if_audio_control.into() {
+                            defmt::info!("usb audio :: control in cs :: audio control interface");
                             match entity_id {
                                 None => {
                                     // Control request directed at the interface itself
                                     return;
                                 },
                                 Some(entity_id) => {
+                                    defmt::info!("usb audio :: control in cs :: audio control entity {:?}", entity_id);
                                     if entity_id == self.feature_unit.into() {
                                         if cs_request.control_selector == descriptors::feature_unit_control_selector::FU_MUTE_CONTROL {
-                                            return xfer.accept_with(&[self.mute as u8]).unwrap();
+                                            if cs_request.request_code == RequestCode::Cur {
+                                                defmt::info!("usb audio :: GET MUTE Cur");
+                                                return xfer.accept_with(&[self.mute as u8]).unwrap();
+                                            }
                                         } else if cs_request.control_selector == descriptors::feature_unit_control_selector::FU_VOLUME_CONTROL {
-                                            return xfer.accept_with(&[self.volume]).unwrap();
+                                            if cs_request.request_code == RequestCode::Cur {
+                                                defmt::info!("usb audio :: GET VOLUME Cur");
+                                                return xfer.accept_with(&self.volume.to_le_bytes()).unwrap();
+                                            } else if cs_request.request_code == RequestCode::Range {
+                                                defmt::info!("usb audio :: GET VOLUME Range");
+                                                return xfer.accept_with(&[
+                                                    0x01, 0x00, // 1 sub-range
+                                                    0x00, 0x00, // -127dB
+                                                    0xff, 0x7f, // +127dB
+                                                    0x00, 0x01, // 1dB resolution (1/256 * 2^8 = 1)
+                                                ]).unwrap();
+                                            }
+                                        }
+                                    } else if entity_id == self.clock_source.into() {
+                                        if cs_request.control_selector == clock_source_control_selectors::CS_SAM_FREQ_CONTROL {
+                                            match cs_request.request_code {
+                                                RequestCode::Cur => {
+                                                    return xfer.accept_with(&(96000_u32.to_le_bytes())).unwrap();
+                                                },
+                                                RequestCode::Range => {
+                                                    let sample_rate = 96000_u32.to_le_bytes();
+                                                    return xfer.accept_with(&[
+                                                        0x01, 0x00, // 1 sub-range
+                                                        sample_rate[0], sample_rate[1], sample_rate[2], sample_rate[3],
+                                                        sample_rate[0], sample_rate[1], sample_rate[2], sample_rate[3],
+                                                        0x01, 0x00, 0x00, 0x00,
+                                                    ]).unwrap();
+                                                },
+                                                RequestCode::Mem => { return xfer.reject().unwrap(); }
+                                            }
                                         }
                                     }
                                 }
