@@ -33,7 +33,7 @@ impl Target {
         let index_bytes = index.to_le_bytes();
         match recipient {
             Recipient::Interface => {
-                let entity_id = if index_bytes[1] == 0 { None } else { Some(index_bytes[0]) };
+                let entity_id = if index_bytes[1] == 0 { None } else { Some(index_bytes[1]) };
                 Ok(Target::Interface(index_bytes[0], entity_id))
             },
             Recipient::Endpoint => {
