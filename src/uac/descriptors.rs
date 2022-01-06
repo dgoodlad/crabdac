@@ -231,7 +231,7 @@ pub mod audio_format_type_1_bit_allocations {
     pub const TYPE_I_RAW_DATA: u32 = 1 << 31;
 }
 
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub struct EntityId(u8);
 
 impl From<EntityId> for u8 {
@@ -416,11 +416,32 @@ impl ClockControls {
     }
 }
 
+pub struct AudioControlAllocator {
+    next_entity_id: u8,
+}
+
+impl AudioControlAllocator {
+    pub fn new() -> AudioControlAllocator {
+        AudioControlAllocator {
+            next_entity_id: 1,
+        }
+    }
+
+    pub fn alloc_entity(&mut self) -> EntityId {
+        if self.next_entity_id == 255 {
+            panic!("Too many allocated audio entities")
+        }
+
+        let entity_id = EntityId(self.next_entity_id);
+        self.next_entity_id += 1;
+        entity_id
+    }
+}
+
 pub struct AudioControlInterfaceDescriptorWriter<'a> {
     buf: &'a mut [u8],
     position: usize,
     audio_class_version: u16,
-    next_entity_id: u8,
 }
 
 impl<'a> AudioControlInterfaceDescriptorWriter<'a> {
@@ -431,18 +452,7 @@ impl<'a> AudioControlInterfaceDescriptorWriter<'a> {
             buf,
             position: 7,
             audio_class_version: 0x0200, // TODO un-hardcode this
-            next_entity_id: 1,
         }
-    }
-
-    pub fn alloc_entity(&mut self) -> Result<EntityId> {
-        if self.next_entity_id == 255 {
-            return Err(UsbError::Unsupported);
-        }
-
-        let entity_id = EntityId(self.next_entity_id);
-        self.next_entity_id += 1;
-        Ok(entity_id)
     }
 
     pub fn write_into(&mut self, writer: &mut DescriptorWriter) -> Result<()> {

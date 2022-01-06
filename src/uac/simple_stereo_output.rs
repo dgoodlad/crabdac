@@ -1,8 +1,27 @@
-use as_slice::AsMutSlice;
-use usb_device::{class_prelude::*, descriptor::descriptor_type::{INTERFACE, ENDPOINT}};
-use super::descriptors::{self, audio_function_class, audio_function_subclass, audio_function_protocol, audio_interface_class::{self, AUDIO}, audio_interface_subclass::{self, AUDIOSTREAMING}, audio_interface_protocol::{self, IP_VERSION_02_00}, AudioControlInterfaceDescriptorWriter, ClockAttributes, ClockControls, terminal_type, ChannelConfig, InputTerminalControls, FeatureUnitControls, as_interface_descriptor_subtype::{AS_GENERAL, FORMAT_TYPE}, format_type_codes::{self, FORMAT_TYPE_I}, audio_format_type_1_bit_allocations::PCM, descriptor_type::CS_ENDPOINT, endpoint_descriptor_subtypes::EP_GENERAL};
+use usb_device::{class_prelude::*, descriptor::{descriptor_type::{INTERFACE, ENDPOINT}, self}, endpoint::{Endpoint, EndpointDirection, Out, In}};
+use crate::uac::descriptors::AudioControlAllocator;
 
-const CHANNELS: u8 = 2;
+use super::{descriptors::{
+    self,
+    audio_function_class,
+    audio_function_subclass,
+    audio_function_protocol,
+    audio_interface_class::{self, AUDIO},
+    audio_interface_subclass::{self, AUDIOSTREAMING},
+    audio_interface_protocol::{self, IP_VERSION_02_00},
+    AudioControlInterfaceDescriptorWriter,
+    ClockAttributes,
+    ClockControls,
+    terminal_type,
+    ChannelConfig,
+    InputTerminalControls,
+    FeatureUnitControls,
+    as_interface_descriptor_subtype::{AS_GENERAL, FORMAT_TYPE},
+    format_type_codes::FORMAT_TYPE_I,
+    audio_format_type_1_bit_allocations::PCM,
+    descriptor_type::CS_ENDPOINT,
+    endpoint_descriptor_subtypes::EP_GENERAL, request_codes::{CUR, RANGE}, audiostreaming_interface_control_selectors::{AS_VAL_ALT_SETTINGS_CONTROL, AS_AUDIO_DATA_FORMAT_CONTROL, AS_ACT_ALT_SETTING_CONTROL}, EntityId
+}, request::ControlRequest};
 
 pub struct SimpleStereoOutput<'a, B: UsbBus> {
     if_audio_control: InterfaceNumber,
@@ -16,14 +35,23 @@ pub struct SimpleStereoOutput<'a, B: UsbBus> {
 
     audio_data_buffer_size: usize,
 
+    clock_source: EntityId,
+    input_terminal: EntityId,
+    feature_unit: EntityId,
+    output_terminal: EntityId,
+
     mute: bool,
     volume: u8,
+
+    alt_setting: u8,
 }
 
 impl<'a, B> SimpleStereoOutput<'a, B>
 where
     B: UsbBus
 {
+    const CHANNELS: usize = 2;
+
     pub fn new(
         alloc: &'a UsbBusAllocator<B>,
         sample_rate: u32,
@@ -33,15 +61,15 @@ where
         let if_audio_control = alloc.interface();
         let if_audio_stream = alloc.interface();
 
-        let audio_data_buffer_size: usize = (sample_rate as usize / 1000 + 1) * audio_subframe_size * CHANNELS as usize;
+        let audio_data_buffer_size: usize = (sample_rate as usize / 1000 + 1) * audio_subframe_size * Self::CHANNELS;
         assert!(audio_data_buffer_size < 1023);
-        let ep_audio_data = alloc.isochronous(
+        let ep_audio_data: Endpoint<'a, B, Out> = alloc.isochronous(
             usb_device::endpoint::IsochronousSynchronizationType::Asynchronous,
             usb_device::endpoint::IsochronousUsageType::Data,
             audio_data_buffer_size as u16,
             0x01,
         );
-        let ep_feedback = alloc.isochronous(
+        let ep_feedback: Endpoint<'a, B, In> = alloc.isochronous(
             usb_device::endpoint::IsochronousSynchronizationType::NoSynchronization,
             usb_device::endpoint::IsochronousUsageType::Feedback,
             3,
@@ -70,6 +98,12 @@ where
             3,
         );
 
+        let mut entity_allocator = AudioControlAllocator::new();
+        let clock_source = entity_allocator.alloc_entity();
+        let input_terminal = entity_allocator.alloc_entity();
+        let feature_unit = entity_allocator.alloc_entity();
+        let output_terminal = entity_allocator.alloc_entity();
+
         Self {
             if_audio_control,
             if_audio_stream,
@@ -79,6 +113,11 @@ where
             audio_subframe_size,
             audio_bit_resolution,
             audio_data_buffer_size,
+            clock_source,
+            input_terminal,
+            feature_unit,
+            output_terminal,
+            alt_setting: 0,
             mute: false,
             volume: 100,
         }
@@ -92,6 +131,18 @@ where
 
 impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
     fn get_configuration_descriptors(&self, writer: &mut DescriptorWriter) -> usb_device::Result<()> {
+        // Configure the two-channel audio output function
+        //
+        // Input Terminal -> Feature Unit -> Output Terminal
+        //
+        // The Input Terminal is configured for "USB Streaming"
+        // The Feature Unit has mute & volume controls
+        // The Output Terminal is configured as "Headphones"
+        //
+        // There is a single clock source, associated with the Output Terminal
+        // since the clock domain of this whole function is tied to the I2S
+        // clock
+
         // Interface Association Descriptor
         writer.iad(
             self.if_audio_control,
@@ -112,55 +163,51 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
         let mut ac_interface_descriptor_writer = AudioControlInterfaceDescriptorWriter::new(
             &mut buf,
         );
-        let clock_source = ac_interface_descriptor_writer.alloc_entity()?;
-        let input_terminal = ac_interface_descriptor_writer.alloc_entity()?;
-        let feature_unit = ac_interface_descriptor_writer.alloc_entity()?;
-        let output_terminal = ac_interface_descriptor_writer.alloc_entity()?;
         ac_interface_descriptor_writer.ac_interface_clock_source(
-            clock_source,
+            self.clock_source,
             ClockAttributes::build(descriptors::ClockType::InternalProgrammable, false),
             ClockControls::new(),
-            Some(output_terminal),
-        );
+            Some(self.output_terminal),
+        )?;
         ac_interface_descriptor_writer.ac_interface_input_terminal(
-            input_terminal,
+            self.input_terminal,
             terminal_type::USB_STREAMING.to_le_bytes(),
             None,
-            Some(clock_source),
+            Some(self.clock_source),
             ChannelConfig::new(None).front_left().front_right(),
             InputTerminalControls::new(),
             None,
-        );
+        )?;
         ac_interface_descriptor_writer.ac_interface_feature_unit(
-            feature_unit,
-            input_terminal,
+            self.feature_unit,
+            self.input_terminal,
             FeatureUnitControls::new()
                 .mute(descriptors::ControlCapabilities::HostProgrammable)
                 .volume(descriptors::ControlCapabilities::HostProgrammable),
             None,
-        );
+        )?;
         ac_interface_descriptor_writer.ac_interface_output_terminal(
-            output_terminal,
+            self.output_terminal,
             terminal_type::OUTPUT_HEADPHONES.to_le_bytes(),
             None,
-            feature_unit,
-            clock_source,
+            self.feature_unit,
+            self.clock_source,
             0x00, // No output terminal controls
             None,
-        );
-        ac_interface_descriptor_writer.write_into(writer);
+        )?;
+        ac_interface_descriptor_writer.write_into(writer)?;
         writer.interface(
             self.if_audio_stream,
             audio_interface_class::AUDIO,
             audio_interface_subclass::AUDIOSTREAMING,
             audio_interface_protocol::IP_VERSION_02_00
-        );
-        writer.interface_alt(self.if_audio_stream, 1, AUDIO, AUDIOSTREAMING, IP_VERSION_02_00, None);
+        )?;
+        writer.interface_alt(self.if_audio_stream, 1, AUDIO, AUDIOSTREAMING, IP_VERSION_02_00, None)?;
         let bm_formats: u32 = PCM;
         let channels = ChannelConfig::new(None).front_left().front_right().channels();
         writer.write(INTERFACE, &[
             AS_GENERAL,
-            input_terminal.into(),
+            self.input_terminal.into(),
             0x00, // TODO set these controls properly
             FORMAT_TYPE_I, // Format Type
             (bm_formats & 0xff) as u8, // Formats
@@ -173,15 +220,15 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
             channels[2], // ...
             channels[3], // ...
             0x00, // Channel Names
-        ]);
+        ])?;
         // 24-bit audio samples in 4-byte subslots
         writer.write(INTERFACE, &[
             FORMAT_TYPE,
             FORMAT_TYPE_I,
             4,
             24,
-        ]);
-        writer.endpoint(&self.ep_audio_data);
+        ])?;
+        writer.endpoint(&self.ep_audio_data)?;
         writer.write(ENDPOINT, &[
             CS_ENDPOINT,
             EP_GENERAL,
@@ -189,8 +236,8 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
             0x00, // no controls (TODO maybe add over-/under-run indicators)
             0x00, // lock delay units is ignored
             0x00, 0x00 // lock delay is also ignored
-        ]);
-        writer.endpoint(&self.ep_feedback);
+        ])?;
+        writer.endpoint(&self.ep_feedback)?;
         Ok(())
     }
 
@@ -208,7 +255,104 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
     }
 
     fn control_in(&mut self, xfer: ControlIn<B>) {
-        let _ = xfer;
+        let request = xfer.request();
+
+        match request.request_type {
+            control::RequestType::Vendor |
+            control::RequestType::Reserved => { return; }
+
+            control::RequestType::Standard => {
+                match request.request {
+                    control::Request::GET_INTERFACE => {
+                        if request.index as u8 == self.if_audio_stream.into() {
+                            xfer.accept_with(&[0]).unwrap();
+                        }
+                    },
+                    _ => { return; }
+                }
+            },
+
+            control::RequestType::Class => {
+                let cs_request = match ControlRequest::parse(request) {
+                    Ok(r) => r,
+                    Err(_) => {
+                        defmt::warn!("usb audio :: Failed to parse class-specific request");
+                        return xfer.reject().unwrap();
+                    }
+                };
+
+                match cs_request.target {
+                    super::request::Target::Interface(interface_number, entity_id) => {
+                        if interface_number == self.if_audio_control.into() {
+                            match entity_id {
+                                None => {
+                                    // Control request directed at the interface itself
+                                    return;
+                                },
+                                Some(entity_id) => {
+                                    if entity_id == self.feature_unit.into() {
+                                        if cs_request.control_selector == descriptors::feature_unit_control_selector::FU_MUTE_CONTROL {
+                                            return xfer.accept_with(&[self.mute as u8]).unwrap();
+                                        } else if cs_request.control_selector == descriptors::feature_unit_control_selector::FU_VOLUME_CONTROL {
+                                            return xfer.accept_with(&[self.volume]).unwrap();
+                                        }
+                                    }
+                                }
+                            }
+                        } else if interface_number == self.if_audio_stream.into() && entity_id == None {
+                            if cs_request.control_selector == AS_ACT_ALT_SETTING_CONTROL {
+                                return xfer.accept_with(&[self.alt_setting]).unwrap();
+                            } else if cs_request.control_selector == AS_VAL_ALT_SETTINGS_CONTROL {
+                                return xfer.accept_with(&[
+                                    // Length
+                                    0x01,
+                                    // Bitmask of current valid alternate settings
+                                    0b00000011,
+                                ])
+                            }
+                        } else {
+                            return xfer.reject().unwrap();
+                        }
+                    },
+                    super::request::Target::Endpoint(endpoint_number) => {
+
+                    },
+                }
+
+                match request.recipient {
+                    control::Recipient::Interface => {
+                        let cs: u8 = (request.value >> 8 & 0xff) as u8;
+                        let cn: u8 = (request.value & 0xff) as u8;
+                        let interface: u8 = (request.index & 0xff) as u8;
+                        let entity_id: u8 = (request.index >> 8 & 0xff) as u8;
+
+                        if interface == self.if_audio_control.into() {
+                            if entity_id == 0 {
+                                // targeting the interface itself
+                            } else {
+                                // targeting a clock/terminal/unit
+                            }
+                        } else if interface == self.if_audio_stream.into() {
+                            if cs == AS_VAL_ALT_SETTINGS_CONTROL {
+                                assert!(request.request == CUR);
+                                xfer.accept_with(&[0x01, 0b11]).unwrap();
+                                return;
+                            } else if cs == AS_AUDIO_DATA_FORMAT_CONTROL {
+                                assert!(request.request == CUR);
+                                xfer.accept_with(&PCM.to_le_bytes()).unwrap();
+                                return;
+                            }
+                        } else {
+                            xfer.reject().unwrap();
+                            return;
+                        }
+                    },
+                    control::Recipient::Endpoint => {
+                    },
+                    _ => { return; }
+                }
+            }
+        }
     }
 
     fn endpoint_setup(&mut self, addr: EndpointAddress) {
