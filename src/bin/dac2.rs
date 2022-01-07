@@ -254,7 +254,7 @@ mod app {
     }
 
     #[task(binds = OTG_HS, local = [producer, usb_dev, usb_audio], shared = [feedback_clock_counter])]
-    fn usb_handler(cx: usb_handler::Context) {
+    fn usb_handler(mut cx: usb_handler::Context) {
         let producer: &mut bbqueue::framed::FrameProducer<'static, BUFFER_SIZE> = cx.local.producer;
         let usb_dev: &mut UsbDevice<UsbBusType> = cx.local.usb_dev;
         let usb_audio: &mut SimpleStereoOutput<UsbBusType> = cx.local.usb_audio;
@@ -264,7 +264,7 @@ mod app {
                 defmt::trace!("usb_handler :: requesting frame up to {:#x} bytes", MAX_FRAME_SIZE);
                 let mut grant = match producer.grant(MAX_FRAME_SIZE) {
                     Ok(grant) => grant,
-                    Err(_) => { defmt::debug!("Dropped USB Frame"); continue; }
+                    Err(_) => { defmt::warn!("Dropped USB Frame"); continue; }
                 };
 
                 let bytes_received = usb_audio.read_audio_data(&mut grant).unwrap();
@@ -273,25 +273,25 @@ mod app {
                 defmt::trace!("usb_handler :: committed {:#x} bytes", bytes_received);
             }
 
-            //if usb_audio.audio_feedback_needed {
-            //    cx.shared.feedback_clock_counter.lock(|counter| {
-            //        usb_audio.write_audio_feedback(counter).unwrap_or_else(|_e| {
-            //            defmt::info!("usb_handler :: feedback skipped, would block");
-            //            0
-            //        });
-            //        counter.clear();
-            //    });
-            //}
+            if usb_audio.audio_feedback_needed {
+                cx.shared.feedback_clock_counter.lock(|counter| {
+                    usb_audio.write_audio_feedback(counter).unwrap_or_else(|e| {
+                        defmt::info!("usb_handler :: feedback skipped, would block :: {:?}", defmt::Debug2Format(&e));
+                        0
+                    });
+                    counter.clear();
+                });
+            }
 
-            //usb_audio.enable_disable.take().map(|b| {
-            //    if b == StreamingState::Enabled {
-            //        usb_audio.audio_feedback_needed = true;
-            //    }
-            //    match toggle_i2s_dma::spawn(b) {
-            //        Ok(_) => defmt::info!("Toggled I2S DMA"),
-            //        Err(_) => defmt::info!("Failed to toggle I2s DMA")
-            //    }
-            //});
+            usb_audio.enable_disable.take().map(|b| {
+                if b == StreamingState::Enabled {
+                    usb_audio.audio_feedback_needed = true;
+                }
+                match toggle_i2s_dma::spawn(b) {
+                    Ok(_) => defmt::info!("Toggled I2S DMA"),
+                    Err(_) => defmt::info!("Failed to toggle I2s DMA")
+                }
+            });
         }
     }
 
@@ -344,7 +344,7 @@ mod app {
 
     #[task(binds = TIM2, local = [feedback_timer], shared = [feedback_clock_counter])]
     fn tim2(mut cx: tim2::Context) {
-        defmt::debug!("TIM2 interrupt");
+        defmt::trace!("TIM2 interrupt");
         let count = cx.local.feedback_timer.get_count();
         match count {
             None => defmt::info!("TIM2 interrupt but no TIR"),
