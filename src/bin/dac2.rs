@@ -39,6 +39,9 @@ mod app {
     use stm32f4xx_hal::i2s;
     use stm32f4xx_hal::{prelude::*, pac, timer::{monotonic::MonoTimer, Timer}};
     use stm32f4xx_hal::rcc::BusTimerClock;
+    //use stm32f4xx_hal::dac;
+    use hal::pac::DAC;
+    use hal::rcc::{Enable, Reset};
 
     use usb_device::prelude::*;
     use usb_device::bus::UsbBusAllocator;
@@ -70,12 +73,18 @@ mod app {
         dma1_stream_7: Option<StreamX<pac::DMA1, 7>>,
         i2s: Option<I2sDevice>,
         feedback_timer: UsbAudioFrequencyFeedback<pac::TIM2, PB8<Alternate<PushPull, 1>>>,
+        onboard_dac: pac::DAC,
+        onboard_dac_producer: bbqueue::framed::FrameProducer<'static, BUFFER_SIZE>,
+        onboard_dac_consumer: bbqueue::framed::FrameConsumer<'static, BUFFER_SIZE>,
+        onboard_dac_read_grant: Option<bbqueue::framed::FrameGrantR<'static, BUFFER_SIZE>>,
+        //onboard_dac: (dac::C1, dac::C2),
     }
 
     #[monotonic(binds = TIM5, default = true)]
     type MicrosecMono = MonoTimer<pac::TIM5, 1_000_000>;
 
     #[init(local = [audio_queue: bbqueue::BBBuffer<BUFFER_SIZE> = bbqueue::BBBuffer::new(),
+                    onboard_dac_queue: bbqueue::BBBuffer<BUFFER_SIZE> = bbqueue::BBBuffer::new(),
                     zeroes: [u16; 768] = [0; 768],
                     usb_bus: Option<UsbBusAllocator<UsbBusType>> = None,
                     ep_memory: [u32; 320] = [0; 320],
@@ -108,6 +117,7 @@ mod app {
         let mono = Timer::new(cx.device.TIM5, &clocks).monotonic();
 
         let (producer, consumer) = cx.local.audio_queue.try_split_framed().unwrap();
+        let (onboard_dac_producer, onboard_dac_consumer) = cx.local.onboard_dac_queue.try_split_framed().unwrap();
 
         let gpioa = cx.device.GPIOA.split();
         let gpiob = cx.device.GPIOB.split();
@@ -183,6 +193,19 @@ mod app {
 
         let feedback_clock_counter = uac::ClockCounter::new(8);
 
+        let rcc_ptr = unsafe { &(*pac::RCC::ptr()) };
+        DAC::enable(&rcc_ptr);
+        DAC::reset(&rcc_ptr);
+        let dac_peripheral: DAC = cx.device.DAC;
+        dac_peripheral.cr.modify(|_r, w| w
+                                 .boff1().enabled()
+                                 .boff2().enabled()
+                                 .ten1().enabled()
+                                 .ten2().enabled()
+                                 .tsel1().tim2_trgo()
+                                 .tsel2().tim2_trgo()
+        );
+
         (
             Shared {
                 i2s_dma: None,
@@ -197,6 +220,10 @@ mod app {
                 dma1_stream_7: Some(dma1_streams.7),
                 i2s: Some(i2s),
                 feedback_timer,
+                onboard_dac: dac_peripheral,
+                onboard_dac_consumer,
+                onboard_dac_producer,
+                onboard_dac_read_grant: None,
             },
             init::Monotonics(mono),
         )
@@ -219,7 +246,7 @@ mod app {
                 .transfer_complete_interrupt(true);
 
             let mut i2s_dma: I2sDmaTransfer =
-                Transfer::init_memory_to_peripheral(dma1_stream_5.take().unwrap(), i2s.take().unwrap(), &ZEROES, None, dma_config);
+                Transfer::init_memory_to_peripheral(dma1_stream_7.take().unwrap(), i2s.take().unwrap(), &ZEROES, None, dma_config);
 
             i2s_dma.start(|i2s| {
                 defmt::info!("Started I2S DMA stream");
@@ -254,9 +281,10 @@ mod app {
         }
     }
 
-    #[task(binds = OTG_HS, local = [producer, usb_dev, usb_audio], shared = [feedback_clock_counter])]
+    #[task(binds = OTG_HS, local = [producer, usb_dev, usb_audio, onboard_dac_producer], shared = [feedback_clock_counter])]
     fn usb_handler(mut cx: usb_handler::Context) {
         let producer: &mut bbqueue::framed::FrameProducer<'static, BUFFER_SIZE> = cx.local.producer;
+        let onboard_dac_producer: &mut bbqueue::framed::FrameProducer<'static, BUFFER_SIZE> = cx.local.onboard_dac_producer;
         let usb_dev: &mut UsbDevice<UsbBusType> = cx.local.usb_dev;
         let usb_audio: &mut SimpleStereoOutput<UsbBusType> = cx.local.usb_audio;
 
@@ -269,6 +297,20 @@ mod app {
                 };
 
                 let bytes_received = usb_audio.read_audio_data(&mut grant).unwrap();
+
+                // TODO this whole thing assumes left-aligned 32-bit audio
+                // subslots from the USB side and 12-bit configuration on the
+                // internal DAC
+                match onboard_dac_producer.grant(MAX_FRAME_SIZE / 2) {
+                    Ok(mut dac_grant) => {
+                        grant[0..bytes_received].chunks(4).zip(dac_grant[0..bytes_received/2].chunks_exact_mut(2)).for_each(|(i2s, dac)| {
+                            dac[0] = i2s[0];
+                            dac[1] = i2s[1] & 0b11110000;
+                        });
+                        dac_grant.commit(bytes_received / 2);
+                    },
+                    Err(_) => { defmt::warn!("usb_handler :: Unable to reserve a grant for DAC DMA"); }
+                }
                 grant.commit(bytes_received);
 
                 defmt::trace!("usb_handler :: committed {:#x} bytes", bytes_received);
