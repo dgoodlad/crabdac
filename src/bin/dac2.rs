@@ -12,6 +12,7 @@ mod app {
     use crabdac::uac;
     use crabdac::uac::StreamingState;
     use crabdac::uac::simple_stereo_output::SimpleStereoOutput;
+    use hal::dma::Stream7;
     use hal::dma::StreamX;
     use hal::gpio::gpiob::PB13;
     use hal::gpio::gpiob::PB8;
@@ -66,7 +67,7 @@ mod app {
         read_grant: Option<bbqueue::framed::FrameGrantR<'static, BUFFER_SIZE>>,
         usb_dev: UsbDevice<'static, UsbBusType>,
         usb_audio: SimpleStereoOutput<'static, UsbBusType>,
-        dma1_stream_5: Option<StreamX<pac::DMA1, 5>>,
+        dma1_stream_7: Option<StreamX<pac::DMA1, 7>>,
         i2s: Option<I2sDevice>,
         feedback_timer: UsbAudioFrequencyFeedback<pac::TIM2, PB8<Alternate<PushPull, 1>>>,
     }
@@ -193,7 +194,7 @@ mod app {
                 read_grant: None,
                 usb_dev,
                 usb_audio,
-                dma1_stream_5: Some(dma1_streams.5),
+                dma1_stream_7: Some(dma1_streams.7),
                 i2s: Some(i2s),
                 feedback_timer,
             },
@@ -201,13 +202,13 @@ mod app {
         )
     }
 
-    #[task(shared = [i2s_dma], local = [dma1_stream_5, i2s])]
+    #[task(shared = [i2s_dma], local = [dma1_stream_7, i2s])]
     fn toggle_i2s_dma(mut cx: toggle_i2s_dma::Context, enable: uac::StreamingState) {
         static ZEROES: [u16; 96 * 2] = [0; 96 * 2];
-        let toggle_i2s_dma::LocalResources { dma1_stream_5, i2s } = cx.local;
+        let toggle_i2s_dma::LocalResources { dma1_stream_7, i2s } = cx.local;
 
         if enable == StreamingState::Enabled {
-            assert!(dma1_stream_5.is_some());
+            assert!(dma1_stream_7.is_some());
             assert!(i2s.is_some());
 
             let dma_config: DmaConfig = DmaConfig::default()
@@ -227,14 +228,14 @@ mod app {
 
             cx.shared.i2s_dma.lock(|o| o.replace(i2s_dma));
         } else {
-            //assert!(dma1_stream_5.is_none());
+            //assert!(dma1_stream_7.is_none());
             //assert!(i2s.is_none());
 
             cx.shared.i2s_dma.lock(|x| {
                 match x.take() {
                     Some(i2s_dma) => {
                         let (stream, peripheral, _buf, _) = i2s_dma.release();
-                        dma1_stream_5.replace(stream);
+                        dma1_stream_7.replace(stream);
                         i2s.replace(peripheral);
                         // TODO release the buffer grant somehow
                     },
@@ -361,5 +362,5 @@ mod app {
         PC12<Alternate<PushPull, 6>>,
     )>;
     type I2sDevice = stm32_i2s_v12x::I2s<I2sPeripheral, TransmitMode<Data24Frame32>>;
-    type I2sDmaTransfer = Transfer<Stream5<pac::DMA1>, I2sDevice, MemoryToPeripheral, &'static [u16], 0>;
+    type I2sDmaTransfer = Transfer<Stream7<pac::DMA1>, I2sDevice, MemoryToPeripheral, &'static [u16], 0>;
 }
