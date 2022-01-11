@@ -9,6 +9,7 @@ use panic_probe as _;
 
 pub mod uac;
 pub mod timer;
+pub mod sai;
 
 // same panicking *behavior* as `panic-probe` but doesn't print a panic message
 // this prevents the panic message being printed *twice* when `defmt::panic` is invoked
