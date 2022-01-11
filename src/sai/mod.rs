@@ -153,6 +153,14 @@ impl<SAI: Instance, const B: char> BlockX<SAI, B> {
 
     }
 
+    pub fn master_transmitter<PINS: Pins<BlockX<SAI, B>, Master>>(self, pins: PINS) -> Transmitter<BlockX<SAI, B>, PINS, Master, Disabled> {
+        Transmitter::master(self, pins)
+    }
+
+    pub fn slave_transmitter<PINS: Pins<BlockX<SAI, B>, Slave>>(self, pins: PINS) -> Transmitter<BlockX<SAI, B>, PINS, Slave, Disabled> {
+        Transmitter::slave(self, pins)
+    }
+
     pub fn master_receiver<PINS: Pins<BlockX<SAI, B>, Master>>(self, pins: PINS) -> Receiver<BlockX<SAI, B>, PINS, Master, Disabled> {
         Receiver::master(self, pins)
     }
@@ -297,5 +305,17 @@ impl<SAI: Instance, PINS, MODE, const B: char> Transmitter<BlockX<SAI, B>, PINS,
 {
     pub fn write(&mut self, data: u32) {
         self.block.ch().dr.write(|w| unsafe { w.data().bits(data) });
+    }
+
+    pub fn disable(mut self) -> Transmitter<BlockX<SAI, B>, PINS, Slave, Disabled> {
+        self.block.ch().cr1.modify(|_, w| w.saien().disabled());
+        while self.block.ch().cr1.read().saien().is_enabled() {
+        }
+        Transmitter {
+            block: self.block,
+            pins: self.pins,
+            _mode: PhantomData,
+            _enabled: PhantomData
+        }
     }
 }
