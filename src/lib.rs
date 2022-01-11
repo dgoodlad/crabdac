@@ -3,7 +3,7 @@
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use defmt_rtt as _; // global logger
-use stm32f4xx_hal as hal; // memory layout
+pub use stm32f4xx_hal as hal; // memory layout
 
 use panic_probe as _;
 
