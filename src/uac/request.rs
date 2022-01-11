@@ -1,9 +1,13 @@
 use core::convert::TryFrom;
 
 use defmt::Format;
-use usb_device::{UsbDirection, control::{Recipient, Request}, UsbError, class_prelude::InterfaceNumber};
+use usb_device::{
+    UsbDirection,
+    control::{Recipient, Request},
+    UsbError
+};
 
-use super::descriptors::{request_codes::{CUR, RANGE, MEM}, EntityId};
+use super::descriptors::request_codes::{CUR, RANGE, MEM};
 
 #[repr(u8)]
 #[derive(Copy, Clone, Eq, PartialEq, Format)]

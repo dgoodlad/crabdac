@@ -1,9 +1,6 @@
-use bytemuck::try_cast;
-use defmt::Debug2Format;
 use usb_device::{
     class_prelude::*,
-    descriptor::descriptor_type::{INTERFACE, ENDPOINT},
-    endpoint::{Endpoint, EndpointDirection, Out, In}
+    endpoint::{Endpoint, Out, In}
 };
 use crate::uac::{descriptors::{AudioControlAllocator, descriptor_type::CS_INTERFACE, feature_unit_control_selector::{FU_MUTE_CONTROL, FU_VOLUME_CONTROL}, clock_source_control_selectors}, request::{RequestCode, Target}};
 
@@ -26,7 +23,12 @@ use super::{descriptors::{
     format_type_codes::FORMAT_TYPE_I,
     audio_format_type_1_bit_allocations::PCM,
     descriptor_type::CS_ENDPOINT,
-    endpoint_descriptor_subtypes::EP_GENERAL, request_codes::{CUR, RANGE}, audiostreaming_interface_control_selectors::{AS_VAL_ALT_SETTINGS_CONTROL, AS_AUDIO_DATA_FORMAT_CONTROL, AS_ACT_ALT_SETTING_CONTROL}, EntityId
+    endpoint_descriptor_subtypes::EP_GENERAL,
+    audiostreaming_interface_control_selectors::{
+        AS_VAL_ALT_SETTINGS_CONTROL,
+        AS_ACT_ALT_SETTING_CONTROL
+    },
+    EntityId
 }, request::ControlRequest, ClockCounter, StreamingState};
 
 pub struct SimpleStereoOutput<'a, B: UsbBus> {
@@ -35,8 +37,11 @@ pub struct SimpleStereoOutput<'a, B: UsbBus> {
     ep_audio_data: EndpointOut<'a, B>,
     ep_feedback: EndpointIn<'a, B>,
 
+    #[allow(dead_code)]
     sample_rate: u32,
+    #[allow(dead_code)]
     audio_subframe_size: usize,
+    #[allow(dead_code)]
     audio_bit_resolution: usize,
 
     audio_data_buffer_size: usize,
@@ -467,7 +472,7 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
                             return xfer.reject().unwrap();
                         }
                     },
-                    super::request::Target::Endpoint(endpoint_number) => {
+                    super::request::Target::Endpoint(_endpoint_number) => {
 
                     },
                 }

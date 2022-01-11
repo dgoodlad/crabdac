@@ -7,7 +7,6 @@ pub mod simple_stereo_output;
 
 const CHANNELS: u32 = 2;
 const SAMPLING_RATE: u32 = 96_000;
-const BITS_PER_SAMPLE: u32 = 24;
 const BYTES_PER_SAMPLE: u32 = 4;
 const USB_FRAME_FREQUENCY: u32 = 1_000;
 
@@ -52,6 +51,7 @@ pub struct UsbAudioClass<'a, B: UsbBus> {
     //audio_stream_buf: &'a mut [u8],
 }
 
+#[allow(dead_code)]
 struct DeviceStrings {
     interface_alt: StringIndex,
 }

@@ -1,6 +1,7 @@
 use usb_device::{
-    class_prelude::{DescriptorWriter, InterfaceNumber, StringIndex},
-    descriptor, Result, UsbError,
+    class_prelude::*,
+    Result,
+    UsbError,
 };
 
 use self::{descriptor_type::CS_INTERFACE, ac_interface_descriptor_subtype::HEADER, audio_function_category::DESKTOP_SPEAKER};
@@ -276,10 +277,10 @@ impl ChannelConfig {
         self
     }
 
-    pub fn front_left(mut self) -> ChannelConfig {
+    pub fn front_left(self) -> ChannelConfig {
         self.add_channel(0)
     }
-    pub fn front_right(mut self) -> ChannelConfig {
+    pub fn front_right(self) -> ChannelConfig {
         self.add_channel(1)
     }
 }
@@ -359,11 +360,11 @@ impl FeatureUnitControls {
         self
     }
 
-    pub fn mute(mut self, capabilities: ControlCapabilities) -> FeatureUnitControls {
+    pub fn mute(self, capabilities: ControlCapabilities) -> FeatureUnitControls {
         self.set_control(0, capabilities)
     }
 
-    pub fn volume(mut self, capabilities: ControlCapabilities) -> FeatureUnitControls {
+    pub fn volume(self, capabilities: ControlCapabilities) -> FeatureUnitControls {
         self.set_control(2, capabilities)
     }
 
@@ -472,7 +473,7 @@ impl<'a> AudioControlInterfaceDescriptorWriter<'a> {
             length[0],
             length[1],
             0x00, // No interface controls
-        ]);
+        ])?;
 
         let mut position: usize = 0;
         for _ in 0..self.num_descriptors {
