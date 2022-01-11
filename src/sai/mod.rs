@@ -90,18 +90,18 @@ pub trait Pins<BLOCK, MODE> {}
 impl<BLOCK, SCK, FS, SD> Pins<BLOCK, Slave>
     for (SCK, FS, SD, NoMasterClock)
 where
-    SCK: SaiPin<BLOCK, Sck>,
-    FS: SaiPin<BLOCK, Fs>,
-    SD: SaiPin<BLOCK, Sd>,
+    SCK: SaiPin<Sck, BLOCK>,
+    FS: SaiPin<Fs, BLOCK>,
+    SD: SaiPin<Sd, BLOCK>,
 {}
 
 impl<BLOCK, SCK, FS, SD, MCLK> Pins<BLOCK, Master>
     for (SCK, FS, SD, MCLK)
 where
-    SCK: SaiPin<BLOCK, Sck>,
-    FS: SaiPin<BLOCK, Fs>,
-    SD: SaiPin<BLOCK, Sd>,
-    MCLK: SaiPin<BLOCK, Mclk>,
+    SCK: SaiPin<Sck, BLOCK>,
+    FS: SaiPin<Fs, BLOCK>,
+    SD: SaiPin<Sd, BLOCK>,
+    MCLK: SaiPin<Mclk, BLOCK>,
 {}
 
 pub trait SaiPin<Pin, Block> {}
