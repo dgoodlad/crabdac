@@ -27,7 +27,7 @@ bytemuck = "1.7.3"
 
 [patch.crates-io]
 # Support isochronous endpoints
-usb-device = { path = "../usb-device", features = ["control-buffer-256"] }
+usb-device = { path = "../usb-device" }
 # Support isochronous endpoints
 synopsys-usb-otg = { path = "../synopsys-usb-otg" }
 # Support ITM1_RMP in TIM2_OR
