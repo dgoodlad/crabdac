@@ -21,12 +21,16 @@ use crate::hal::{
         SAI1,
         SAI2,
     },
-    rcc::Clocks, gpio::{Alternate, PushPull, NoPin}
+    rcc::{
+        self,
+        Clocks,
+    },
+    gpio::{Alternate, PushPull, NoPin}
 };
 
 // Implemented by all SAI instances
 pub trait Instance:
-    Deref<Target = sai1::RegisterBlock>
+    Deref<Target = sai1::RegisterBlock> + rcc::Enable + rcc::Reset
 {
     #[doc(hidden)]
     fn ptr() -> *const sai1::RegisterBlock;
@@ -64,6 +68,10 @@ where
     pub fn new(sai: SAI, clocks: &Clocks) -> Sai<SAI> {
         // Ensures that the SAI peripheral's clock is configured
         let clock = SAI::clock(clocks).unwrap();
+
+        let rcc = unsafe { &(*hal::pac::RCC::ptr()) };
+        SAI::enable(&rcc);
+        SAI::reset(&rcc);
 
         Sai { sai, clock }
     }
@@ -290,14 +298,56 @@ where
     }
 
     #[inline(always)]
-    pub fn enable(mut self) -> Transmitter<BlockX<SAI, B>, PINS, Slave, Enabled> {
+    //pub fn enable(mut self) -> Transmitter<BlockX<SAI, B>, PINS, MODE, Enabled> {
+    pub fn enable(&mut self) {
         self.block.ch().cr1.modify(|_, w| w.saien().enabled());
-        Transmitter {
-            block: self.block,
-            pins: self.pins,
-            _mode: PhantomData,
-            _enabled: PhantomData,
-        }
+        let sr = self.block.ch().sr.read();
+        defmt::info!("SAI configure :: cr1 0b{:b}", self.block.ch().cr1.read().bits());
+        defmt::info!("SAI configure :: cr2 {:?}", self.block.ch().cr2.read().bits());
+        defmt::info!("SAI SR :: WCKCFG: {}", defmt::Debug2Format(&sr.wckcfg().variant()));
+        // Transmitter {
+        //     block: self.block,
+        //     pins: self.pins,
+        //     _mode: PhantomData,
+        //     _enabled: PhantomData,
+        // }
+    }
+
+    pub fn configure(&mut self) {
+        //defmt::info!("Configuring using register at {:?}", defmt::Debug2Format(&self.block.ch().cr1.as_ptr()));
+        unsafe { self.block.ch().cr1.modify(|_, w| w.mckdiv().bits(1)) };
+        self.block.ch().cr1.modify(|_, w| w
+                                   .prtcfg().free()
+                                   .ds().bit24()
+                                   .lsbfirst().msb_first()
+                                   .ckstr().rising_edge()
+                                   .syncen().asynchronous()
+                                   .mono().stereo()
+                                   .outdriv().immediately()
+                                   .dmaen().enabled()
+                                   .nodiv().master_clock()
+        );
+        self.block.ch().cr2.modify(|_, w| w
+                                   .fth().empty()
+                                   .fflush().no_flush()
+                                   .tris().clear_bit()
+                                   .mute().disabled()
+                                   .muteval().send_zero()
+        );
+        unsafe { self.block.ch().frcr.modify(|_, w| w
+                                             .frl().bits(63)
+                                             .fsall().bits(31)
+                                             .fsdef().clear_bit()
+                                             .fspol().rising_edge()
+                                             .fsoff().on_first()
+        )};
+        unsafe { self.block.ch().slotr.modify(|_, w| w
+                                              .fboff().bits(0)
+                                              .slotsz().bit32()
+                                              .nbslot().bits(1)
+                                              .sloten().bits(0b11)
+        )};
+        self.block.ch().dr.write(|w| unsafe {w.data().bits(0)});
     }
 }
 
