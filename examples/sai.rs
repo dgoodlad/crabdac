@@ -47,7 +47,7 @@ mod app {
     #[monotonic(binds = TIM5, default = true)]
     type MicrosecMono = MonoTimer<pac::TIM5, 1_000_000>;
 
-    #[init(local = [audio_data: [u32; 2] = [0x00000fff, 0x00000fff]])]
+    #[init(local = [audio_data: [u32; 2] = [0x000000ff, 0x00ffffff]])]
     fn init(cx: init::Context) -> (Shared, Local, init::Monotonics) {
         defmt::info!("INIT :: Configuring Clocks");
 
@@ -62,7 +62,7 @@ mod app {
             .sai1_clk(49152.khz())
             .freeze();
 
-        //assert!(clocks.is_pll48clk_valid());
+        assert!(clocks.is_pll48clk_valid());
 
         defmt::info!("INIT :: Clocks configured");
         defmt::info!("INIT :: SAI Clock: {:?}", defmt::Debug2Format(&clocks.sai1_clk()));
