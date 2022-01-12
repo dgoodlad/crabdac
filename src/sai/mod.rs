@@ -351,12 +351,7 @@ where
 
     pub fn configure(&mut self) {
         unsafe { self.block.ch().cr1.modify(|_, w| w
-                                            .prtcfg().free()
-                                            .ds().bit24()
-                                            .lsbfirst().msb_first()
-                                            .ckstr().rising_edge()
                                             .syncen().asynchronous()
-                                            .mono().stereo()
                                             .outdriv().immediately()
                                             .dmaen().enabled()
                                             .nodiv().master_clock()
