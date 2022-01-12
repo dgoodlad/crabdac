@@ -288,7 +288,7 @@ where
 
     #[inline(always)]
     fn slave(mut block: BlockX<SAI, B>, pins: PINS) -> Transmitter<BlockX<SAI, B>, PINS, Slave, Disabled> {
-        block.ch().cr1.modify(|_, w| w.mode().master_tx());
+        block.ch().cr1.modify(|_, w| w.mode().slave_tx());
         Transmitter {
             block,
             pins,
