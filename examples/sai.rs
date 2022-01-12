@@ -32,7 +32,7 @@ mod app {
         PA9<Alternate<PushPull, 6>>,
         PC0<Alternate<PushPull, 6>>,
     );
-    type SaiTx = sai::Transmitter<sai::BlockB<pac::SAI1>, SaiPins, sai::Master, sai::Disabled>;
+    type SaiTx = sai::Transmitter<sai::BlockB<pac::SAI1>, SaiPins, sai::Master>;
     type SaiDmaTransfer = Transfer<Stream4<DMA2>, SaiTx, MemoryToPeripheral, &'static mut [u32; 2], 1>;
 
     #[shared]

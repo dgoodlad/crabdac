@@ -19,8 +19,8 @@ use super::*;
 macro_rules! dma_map {
     ($(($Stream:ty, $C: literal, $Block:ty)),+ $(,)*) => {
         $(
-            unsafe impl<MODE, PINS: Pins<$Block, MODE>, ENABLED> DMASet<$Stream, MemoryToPeripheral, $C> for Transmitter<$Block, PINS, MODE, ENABLED> {}
-            unsafe impl<MODE, PINS: Pins<$Block, MODE>, ENABLED> DMASet<$Stream, PeripheralToMemory, $C> for Receiver<$Block, PINS, MODE, ENABLED> {}
+            unsafe impl<MODE, PINS: Pins<$Block, MODE>> DMASet<$Stream, MemoryToPeripheral, $C> for Transmitter<$Block, PINS, MODE> {}
+            unsafe impl<MODE, PINS: Pins<$Block, MODE>> DMASet<$Stream, PeripheralToMemory, $C> for Receiver<$Block, PINS, MODE> {}
         )+
     };
 }
@@ -43,7 +43,7 @@ dma_map!(
     (Stream6<DMA2>, 3, BlockB<SAI2>),
 );
 
-unsafe impl<SAI, MODE, PINS, ENABLED> PeriAddress for Transmitter<BlockA<SAI>, PINS, MODE, ENABLED>
+unsafe impl<SAI, MODE, PINS> PeriAddress for Transmitter<BlockA<SAI>, PINS, MODE>
 where
     SAI: Instance,
 {
@@ -55,7 +55,7 @@ where
     type MemSize = u32;
 }
 
-unsafe impl<SAI, MODE, PINS, ENABLED> PeriAddress for Transmitter<BlockB<SAI>, PINS, MODE, ENABLED>
+unsafe impl<SAI, MODE, PINS> PeriAddress for Transmitter<BlockB<SAI>, PINS, MODE>
 where
     SAI: Instance,
 {

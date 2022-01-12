@@ -2,11 +2,10 @@ use core::{marker::PhantomData, ops::Deref};
 
 pub mod dma;
 
-use hal::time::Hertz;
-
 use crate::hal::{
-    self,
     gpio::{
+        Alternate,
+        PushPull,
         gpioa,
         gpiob,
         gpioc,
@@ -16,6 +15,7 @@ use crate::hal::{
         gpiog,
     },
     pac::{
+        self,
         sai1,
         DMA2,
         SAI1,
@@ -25,7 +25,7 @@ use crate::hal::{
         self,
         Clocks,
     },
-    gpio::{Alternate, PushPull, NoPin}
+    time::Hertz,
 };
 
 // Implemented by all SAI instances
@@ -69,7 +69,7 @@ where
         // Ensures that the SAI peripheral's clock is configured
         let clock = SAI::clock(clocks).unwrap();
 
-        let rcc = unsafe { &(*hal::pac::RCC::ptr()) };
+        let rcc = unsafe { &(*pac::RCC::ptr()) };
         SAI::enable(&rcc);
         SAI::reset(&rcc);
 
@@ -161,19 +161,19 @@ impl<SAI: Instance, const B: char> BlockX<SAI, B> {
 
     }
 
-    pub fn master_transmitter<PINS: Pins<BlockX<SAI, B>, Master>>(self, pins: PINS) -> Transmitter<BlockX<SAI, B>, PINS, Master, Disabled> {
+    pub fn master_transmitter<PINS: Pins<BlockX<SAI, B>, Master>>(self, pins: PINS) -> Transmitter<BlockX<SAI, B>, PINS, Master> {
         Transmitter::master(self, pins)
     }
 
-    pub fn slave_transmitter<PINS: Pins<BlockX<SAI, B>, Slave>>(self, pins: PINS) -> Transmitter<BlockX<SAI, B>, PINS, Slave, Disabled> {
+    pub fn slave_transmitter<PINS: Pins<BlockX<SAI, B>, Slave>>(self, pins: PINS) -> Transmitter<BlockX<SAI, B>, PINS, Slave> {
         Transmitter::slave(self, pins)
     }
 
-    pub fn master_receiver<PINS: Pins<BlockX<SAI, B>, Master>>(self, pins: PINS) -> Receiver<BlockX<SAI, B>, PINS, Master, Disabled> {
+    pub fn master_receiver<PINS: Pins<BlockX<SAI, B>, Master>>(self, pins: PINS) -> Receiver<BlockX<SAI, B>, PINS, Master> {
         Receiver::master(self, pins)
     }
 
-    pub fn slave_receiver<PINS: Pins<BlockX<SAI, B>, Slave>>(self, pins: PINS) -> Receiver<BlockX<SAI, B>, PINS, Slave, Disabled> {
+    pub fn slave_receiver<PINS: Pins<BlockX<SAI, B>, Slave>>(self, pins: PINS) -> Receiver<BlockX<SAI, B>, PINS, Slave> {
         Receiver::slave(self, pins)
     }
 }
@@ -211,21 +211,21 @@ pub struct Tx;
 pub struct Enabled;
 pub struct Disabled;
 
-pub struct Receiver<BLOCK, PINS, MODE, ENABLED> {
+pub struct Receiver<BLOCK, PINS, MODE> {
     block: BLOCK,
     pins: PINS,
+    enabled: bool,
     _mode: PhantomData<MODE>,
-    _enabled: PhantomData<ENABLED>,
 }
 
-impl<BLOCK, PINS, MODE, ENABLED> Receiver<BLOCK, PINS, MODE, ENABLED> {
+impl<BLOCK, PINS, MODE> Receiver<BLOCK, PINS, MODE> {
     #[inline(always)]
     pub fn release(self) -> (BLOCK, PINS) {
         (self.block, self.pins)
     }
 }
 
-impl<SAI: Instance, PINS, MODE, const B: char> Receiver<BlockX<SAI, B>, PINS, MODE, Disabled>
+impl<SAI: Instance, PINS, MODE, const B: char> Receiver<BlockX<SAI, B>, PINS, MODE>
 where
     PINS: Pins<BlockX<SAI, B>, MODE>
 {
@@ -235,8 +235,8 @@ where
         Receiver {
             block,
             pins,
+            enabled: false,
             _mode: PhantomData,
-            _enabled: PhantomData,
         }
     }
 
@@ -246,8 +246,8 @@ where
         Receiver {
             block,
             pins,
+            enabled: false,
             _mode: PhantomData,
-            _enabled: PhantomData
         }
     }
 
@@ -257,60 +257,95 @@ where
     }
 }
 
-pub struct Transmitter<BLOCK, PINS, MODE, ENABLED> {
+pub struct Transmitter<BLOCK, PINS, MODE> {
     block: BLOCK,
     pins: PINS,
+    enabled: bool,
     _mode: PhantomData<MODE>,
-    _enabled: PhantomData<ENABLED>,
 }
 
-impl <BLOCK, PINS, MODE> Transmitter<BLOCK, PINS, MODE, Disabled> {
+/// An SAI audio block configured as transmitter
+impl <BLOCK, PINS, MODE> Transmitter<BLOCK, PINS, MODE> {
+
+    /// Release the underlying peripherals
+    ///
+    /// This may, currently, be done even if the block is enabled. You should
+    /// probably disable the block before calling this function.
     #[inline(always)]
     pub fn release(self) -> (BLOCK, PINS) {
         (self.block, self.pins)
     }
 }
 
-impl<SAI: Instance, PINS, MODE, const B: char> Transmitter<BlockX<SAI, B>, PINS, MODE, Disabled>
+impl<SAI: Instance, PINS, MODE, const B: char> Transmitter<BlockX<SAI, B>, PINS, MODE>
 where
     PINS: Pins<BlockX<SAI, B>, MODE>
 {
+    /// Configure the SAI block in master mode as a transmitter
+    ///
+    /// The MCLK, SCK, and FS signals will be generated and output by this
+    /// device.
     #[inline(always)]
-    fn master(mut block: BlockX<SAI, B>, pins: PINS) -> Transmitter<BlockX<SAI, B>, PINS, Master, Disabled> {
-        block.ch().cr1.modify(|_, w| w.mode().master_tx());
+    fn master(mut block: BlockX<SAI, B>, pins: PINS) -> Transmitter<BlockX<SAI, B>, PINS, Master> {
+        block.ch().cr1.modify(|_, w| w
+                              .mode().master_tx()
+                              .syncen().asynchronous()
+                              .outdriv().on_start()
+                              .nodiv().master_clock()
+        );
+
         Transmitter {
             block,
             pins,
+            enabled: false,
             _mode: PhantomData,
-            _enabled: PhantomData,
         }
     }
 
+    /// Configure the SAI block in slave mode as a transmitter
+    ///
+    /// The SCK and FS signals are expected to be generated externally.
     #[inline(always)]
-    fn slave(mut block: BlockX<SAI, B>, pins: PINS) -> Transmitter<BlockX<SAI, B>, PINS, Slave, Disabled> {
-        block.ch().cr1.modify(|_, w| w.mode().slave_tx());
+    fn slave(mut block: BlockX<SAI, B>, pins: PINS) -> Transmitter<BlockX<SAI, B>, PINS, Slave> {
+        block.ch().cr1.modify(|_, w| w
+                              .mode().slave_tx()
+                              .outdriv().on_start()
+                              .nodiv().no_div()
+        );
         Transmitter {
             block,
             pins,
+            enabled: false,
             _mode: PhantomData,
-            _enabled: PhantomData,
         }
     }
 
+    /// Enables the SAI block
+    ///
+    /// This isn't guaranteed to work, per the datasheet:
+    ///
+    /// > Before setting this bit to 1, check that it is set to 0, otherwise the
+    /// > enable command is not taken into account
+    ///
+    /// but this is unlikely unless you're toggling it quickly without polling
+    /// afterwards. If you use the `disable` method here, this case shouldn't
+    /// arise.
     #[inline(always)]
-    //pub fn enable(mut self) -> Transmitter<BlockX<SAI, B>, PINS, MODE, Enabled> {
     pub fn enable(&mut self) {
-        self.block.ch().cr1.modify(|_, w| w.saien().enabled());
-        let sr = self.block.ch().sr.read();
-        defmt::info!("SAI configure :: cr1 0b{:b}", self.block.ch().cr1.read().bits());
-        defmt::info!("SAI configure :: cr2 {:?}", self.block.ch().cr2.read().bits());
-        defmt::info!("SAI SR :: WCKCFG: {}", defmt::Debug2Format(&sr.wckcfg().variant()));
-        // Transmitter {
-        //     block: self.block,
-        //     pins: self.pins,
-        //     _mode: PhantomData,
-        //     _enabled: PhantomData,
-        // }
+        self.block.ch().cr1.modify(|_, w| {
+            w.saien().enabled()
+        });
+        self.enabled = true;
+    }
+
+    /// Disables the SAI block
+    ///
+    /// Will loop until the block is actually disabled
+    #[inline(always)]
+    pub fn disable(mut self) {
+        self.block.ch().cr1.modify(|_, w| w.saien().disabled());
+        self.enabled = false;
+        while self.block.ch().cr1.read().saien().is_enabled() {}
     }
 
     /// Configures the SAI audio block in 24-bit I2S data format
@@ -352,7 +387,7 @@ where
     pub fn configure(&mut self) {
         unsafe { self.block.ch().cr1.modify(|_, w| w
                                             .syncen().asynchronous()
-                                            .outdriv().immediately()
+                                            .outdriv().on_start()
                                             .dmaen().enabled()
                                             .nodiv().master_clock()
                                             .mckdiv().bits(1)
@@ -366,23 +401,8 @@ where
         );
         self.i2s_24bit_format();
     }
-}
 
-impl<SAI: Instance, PINS, MODE, const B: char> Transmitter<BlockX<SAI, B>, PINS, MODE, Enabled>
-{
     pub fn write(&mut self, data: u32) {
         self.block.ch().dr.write(|w| unsafe { w.data().bits(data) });
-    }
-
-    pub fn disable(mut self) -> Transmitter<BlockX<SAI, B>, PINS, Slave, Disabled> {
-        self.block.ch().cr1.modify(|_, w| w.saien().disabled());
-        while self.block.ch().cr1.read().saien().is_enabled() {
-        }
-        Transmitter {
-            block: self.block,
-            pins: self.pins,
-            _mode: PhantomData,
-            _enabled: PhantomData
-        }
     }
 }
