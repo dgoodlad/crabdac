@@ -313,6 +313,42 @@ where
         // }
     }
 
+    /// Configures the SAI audio block in 24-bit I2S data format
+    ///
+    /// This is as described in the "Audio Data Interface" section of the TI
+    /// PCM1792A datasheet, SLES105B:
+    ///
+    /// * 24-bit data in 32-bit slots
+    /// * MSB first, left-aligned in data slot
+    /// * 2-slot frames (stereo): L-channel then R-channel
+    /// * Frames are low on left channel, high on right channel
+    /// * FS (LRCK) signal changes value 1 bit clock before data the first bit
+    ///   of data for the frame/slot.
+    pub fn i2s_24bit_format(&mut self) {
+        self.block.ch().cr1.modify(|_, w| w
+                                   .prtcfg().free()
+                                   .ds().bit24()
+                                   .lsbfirst().msb_first()
+                                   .ckstr().falling_edge()
+                                   .mono().stereo()
+        );
+
+        unsafe { self.block.ch().frcr.write(|w| w
+                                    .frl().bits(63)
+                                    .fsall().bits(31)
+                                    .fsdef().clear_bit()
+                                    .fspol().falling_edge()
+                                    .fsoff().before_first()
+        )};
+
+        unsafe { self.block.ch().slotr.write(|w| w
+                                             .fboff().bits(0)
+                                             .slotsz().bit32()
+                                             .nbslot().bits(1)
+                                             .sloten().bits(0b11)
+        )};
+    }
+
     pub fn configure(&mut self) {
         unsafe { self.block.ch().cr1.modify(|_, w| w
                                             .prtcfg().free()
@@ -333,20 +369,7 @@ where
                                    .mute().disabled()
                                    .muteval().send_zero()
         );
-        unsafe { self.block.ch().frcr.modify(|_, w| w
-                                             .frl().bits(63)
-                                             .fsall().bits(31)
-                                             .fsdef().clear_bit()
-                                             .fspol().rising_edge()
-                                             .fsoff().on_first()
-        )};
-        unsafe { self.block.ch().slotr.modify(|_, w| w
-                                              .fboff().bits(0)
-                                              .slotsz().bit32()
-                                              .nbslot().bits(1)
-                                              .sloten().bits(0b11)
-        )};
-        self.block.ch().dr.write(|w| unsafe {w.data().bits(0)});
+        self.i2s_24bit_format();
     }
 }
 
