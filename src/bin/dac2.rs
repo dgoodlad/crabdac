@@ -1,7 +1,10 @@
 #![no_main]
 #![no_std]
 
+use core::marker::PhantomData;
+
 use crabdac as _;
+use stm32f4xx_hal::{dma::{traits::{PeriAddress, DMASet}, Stream7, MemoryToPeripheral, Stream5}, pac::DMA1};
 
 #[rtic::app(device = stm32f4xx_hal::pac, dispatchers = [SPI2])]
 mod app {
@@ -14,7 +17,6 @@ mod app {
     use crabdac::uac::simple_stereo_output::SimpleStereoOutput;
     use hal::dma::Stream7;
     use hal::dma::StreamX;
-    use hal::gpio::gpiob::PB13;
     use hal::gpio::gpiob::PB8;
 
     use bbqueue;
@@ -40,7 +42,7 @@ mod app {
     use stm32f4xx_hal::{prelude::*, pac, timer::{monotonic::MonoTimer, Timer}};
     use stm32f4xx_hal::rcc::BusTimerClock;
     //use stm32f4xx_hal::dac;
-    use hal::pac::DAC;
+    //use hal::pac::DAC;
     use hal::rcc::{Enable, Reset};
 
     use usb_device::prelude::*;
@@ -48,6 +50,8 @@ mod app {
 
     use stm32f4xx_hal as hal;
     use hal::otg_hs::{USB, UsbBus, UsbBusType};
+
+    use crate::DualChannel;
 
     const CHANNELS: u32 = 2;
     const SAMPLE_RATE: u32 = 96000;
@@ -60,6 +64,7 @@ mod app {
     #[shared]
     struct Shared {
         i2s_dma: Option<I2sDmaTransfer>,
+        dac_dma: Option<DacDmaTransfer>,
         feedback_clock_counter: uac::ClockCounter,
     }
 
@@ -73,7 +78,7 @@ mod app {
         dma1_stream_7: Option<StreamX<pac::DMA1, 7>>,
         i2s: Option<I2sDevice>,
         feedback_timer: UsbAudioFrequencyFeedback<pac::TIM2, PB8<Alternate<PushPull, 1>>>,
-        onboard_dac: pac::DAC,
+        onboard_dac: Option<crate::DAC<DualChannel, 12>>,
         onboard_dac_producer: bbqueue::framed::FrameProducer<'static, BUFFER_SIZE>,
         onboard_dac_consumer: bbqueue::framed::FrameConsumer<'static, BUFFER_SIZE>,
         onboard_dac_read_grant: Option<bbqueue::framed::FrameGrantR<'static, BUFFER_SIZE>>,
@@ -194,9 +199,9 @@ mod app {
         let feedback_clock_counter = uac::ClockCounter::new(8);
 
         let rcc_ptr = unsafe { &(*pac::RCC::ptr()) };
-        DAC::enable(&rcc_ptr);
-        DAC::reset(&rcc_ptr);
-        let dac_peripheral: DAC = cx.device.DAC;
+        pac::DAC::enable(&rcc_ptr);
+        pac::DAC::reset(&rcc_ptr);
+        let dac_peripheral: pac::DAC = cx.device.DAC;
         dac_peripheral.cr.modify(|_r, w| w
                                  .boff1().enabled()
                                  .boff2().enabled()
@@ -205,10 +210,12 @@ mod app {
                                  .tsel1().tim2_trgo()
                                  .tsel2().tim2_trgo()
         );
+        let dac = crate::DAC::<DualChannel, 12>::dual_channel_12_bit(dac_peripheral);
 
         (
             Shared {
                 i2s_dma: None,
+                dac_dma: None,
                 feedback_clock_counter,
             },
             Local {
@@ -220,7 +227,7 @@ mod app {
                 dma1_stream_7: Some(dma1_streams.7),
                 i2s: Some(i2s),
                 feedback_timer,
-                onboard_dac: dac_peripheral,
+                onboard_dac: Some(dac),
                 onboard_dac_consumer,
                 onboard_dac_producer,
                 onboard_dac_read_grant: None,
@@ -338,7 +345,7 @@ mod app {
         }
     }
 
-    #[task(binds = DMA1_STREAM5, priority = 3, local = [consumer, read_grant], shared = [i2s_dma])]
+    #[task(binds = DMA1_STREAM7, priority = 3, local = [consumer, read_grant], shared = [i2s_dma])]
     fn i2s_dma_handler(cx: i2s_dma_handler::Context) {
         static ZEROES: [u16; 96 * 2] = [0; 96 * 2];
 
@@ -385,12 +392,35 @@ mod app {
         }
     }
 
+    #[task(binds = DMA1_STREAM5, priority = 3, local = [onboard_dac_consumer, onboard_dac_read_grant], shared = [dac_dma])]
+    fn dac_dma_handler(cx: dac_dma_handler::Context) {
+        let consumer = cx.local.onboard_dac_consumer;
+        let read_grant = cx.local.onboard_dac_read_grant;
+        let mut dma = cx.shared.dac_dma;
+
+        if Stream7::<pac::DMA1>::get_transfer_complete_flag() {
+            match consumer.read() {
+                None => {
+
+                },
+                Some(mut next_grant) => {
+                    next_grant.auto_release(true);
+                    dma.lock(|dma| {
+                        let b: &[u32] = cast_slice(unsafe { transmute::<&[u8], &'static [u8]>(&next_grant) });
+                        dma.as_mut().unwrap().next_transfer(b).unwrap();
+                    });
+                    read_grant.replace(next_grant);
+                }
+            }
+        }
+    }
+
     #[task(binds = TIM2, local = [feedback_timer], shared = [feedback_clock_counter])]
     fn tim2(mut cx: tim2::Context) {
         defmt::trace!("TIM2 interrupt");
         let count = cx.local.feedback_timer.get_count();
         match count {
-            None => defmt::info!("TIM2 interrupt but no TIR"),
+            None => defmt::warn!("TIM2 interrupt but no TIR"),
             Some(i) => {
                 cx.shared.feedback_clock_counter.lock(|counter| counter.add(i));
             },
@@ -405,4 +435,39 @@ mod app {
     )>;
     type I2sDevice = stm32_i2s_v12x::I2s<I2sPeripheral, TransmitMode<Data24Frame32>>;
     type I2sDmaTransfer = Transfer<Stream7<pac::DMA1>, I2sDevice, MemoryToPeripheral, &'static [u16], 0>;
+
+    type DacDmaTransfer = Transfer<Stream5<pac::DMA1>, crate::DAC<DualChannel, 12>, MemoryToPeripheral, &'static [u32], 7>;
 }
+
+
+#[allow(dead_code)]
+struct C1;
+#[allow(dead_code)]
+struct C2;
+pub struct DualChannel;
+
+pub struct DAC<CHANNELS, const BITS: u8> {
+    peri: stm32f4xx_hal::pac::DAC,
+    _channels: PhantomData<CHANNELS>,
+}
+
+impl<CHANNELS, const BITS: u8> DAC<CHANNELS, BITS> {
+    fn dual_channel_12_bit(peri: stm32f4xx_hal::pac::DAC) -> DAC::<DualChannel, 12> {
+        DAC { peri, _channels: PhantomData, }
+    }
+
+    fn release(self) -> stm32f4xx_hal::pac::DAC {
+        self.peri
+    }
+}
+
+unsafe impl PeriAddress for DAC<DualChannel, 12> {
+    type MemSize = u32;
+
+    fn address(&self) -> u32 {
+        let registers = &*self.peri;
+        &registers.dhr12ld as *const _ as u32
+    }
+}
+
+unsafe impl<const BITS: u8> DMASet<Stream5<DMA1>, MemoryToPeripheral, 7> for DAC<DualChannel, BITS> {}
