@@ -15,14 +15,10 @@ defmt = "0.3.0"
 defmt-rtt = "0.3.0"
 panic-probe = { version = "0.3.0", features = ["print-defmt"] }
 cortex-m-rtic = "1.0"
-stm32f4xx-hal = { version = "0.11.1", features = ["stm32f446", "rtic", "i2s", "usb_hs"] }
-stm32_i2s_v12x = "0.2.0"
+stm32f4xx-hal = { version = "0.11.1", features = ["stm32f446", "rtic", "usb_hs"] }
 usb-device = { version = "0.2.8", features = ["control-buffer-256"] }
-heapless = "0.7.9"
 as-slice = "0.2.1"
-embedded-dma = "0.1.2"
 bbqueue = "0.5.1"
-stable_deref_trait = { version = "1.2.0", default-features = false }
 bytemuck = "1.7.3"
 
 [patch.crates-io]
@@ -32,11 +28,8 @@ usb-device = { path = "../usb-device" }
 synopsys-usb-otg = { path = "../synopsys-usb-otg" }
 # Support ITM1_RMP in TIM2_OR
 stm32f4 = { path = "../../stm32-rs/stm32f4" }
-# Pull in some recent support for newer cortex-m-rt versions
-#stm32f4xx-hal = { git = "https://github.com/stm32-rs/stm32f4xx-hal" }
+# Fix SAI PLL, add rcc::Enable + rcc::Reset to SAIx peripherals
 stm32f4xx-hal = { path = "../../stm32f4xx-hal" }
-# Fix linker script issues
-stm32_i2s_v12x = { git = "https://github.com/samcrow/stm32_i2s" }
 
 [features]
 # set logging levels here
