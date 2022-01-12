@@ -314,19 +314,18 @@ where
     }
 
     pub fn configure(&mut self) {
-        //defmt::info!("Configuring using register at {:?}", defmt::Debug2Format(&self.block.ch().cr1.as_ptr()));
-        unsafe { self.block.ch().cr1.modify(|_, w| w.mckdiv().bits(1)) };
-        self.block.ch().cr1.modify(|_, w| w
-                                   .prtcfg().free()
-                                   .ds().bit24()
-                                   .lsbfirst().msb_first()
-                                   .ckstr().rising_edge()
-                                   .syncen().asynchronous()
-                                   .mono().stereo()
-                                   .outdriv().immediately()
-                                   .dmaen().enabled()
-                                   .nodiv().master_clock()
-        );
+        unsafe { self.block.ch().cr1.modify(|_, w| w
+                                            .prtcfg().free()
+                                            .ds().bit24()
+                                            .lsbfirst().msb_first()
+                                            .ckstr().rising_edge()
+                                            .syncen().asynchronous()
+                                            .mono().stereo()
+                                            .outdriv().immediately()
+                                            .dmaen().enabled()
+                                            .nodiv().master_clock()
+                                            .mckdiv().bits(1)
+        )};
         self.block.ch().cr2.modify(|_, w| w
                                    .fth().empty()
                                    .fflush().no_flush()
