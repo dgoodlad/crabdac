@@ -258,6 +258,33 @@ mod app {
         let usb_dev: &mut UsbDevice<UsbBusType> = cx.local.usb_dev;
         let usb_audio: &mut SimpleStereoOutput<UsbBusType> = cx.local.usb_audio;
 
+        cortex_m::interrupt::free(|_cs| {
+            let otg_device = unsafe { &*pac::OTG_HS_DEVICE::ptr() };
+            let otg_global = unsafe { &*pac::OTG_HS_GLOBAL::ptr() };
+            if otg_global.gintsts.read().iisoixfr().bit_is_set() {
+                otg_global.gintsts.modify(|_,w| w.iisoixfr().set_bit());
+                otg_device.diepint1.modify(|r,w| unsafe {
+                    w.bits(r.bits())
+                });
+
+                otg_device.diepctl1.modify(|_,w| w
+                                           .snak().set_bit()
+                                           .epdis().set_bit()
+                );
+                while otg_device.diepint1.read().epdisd().bit_is_clear() {}
+
+                otg_global.grstctl.modify(|_,w| unsafe {
+                    w.txfflsh().set_bit().txfnum().bits(0x01)
+                });
+                while otg_global.grstctl.read().txfflsh().bit_is_set() {}
+            }
+
+            if otg_global.gintsts.read().sof().bit_is_set() {
+                otg_global.gintsts.write(|w| w.sof().set_bit());
+                usb_audio.write_raw_feedback(0x18000).ok();
+            }
+        });
+
         while usb_dev.poll(&mut [usb_audio]) {
             if usb_audio.audio_data_available {
                 producer.grant_exact(USB_AUDIO_FRAME_SIZE).and_then(|mut grant| {
