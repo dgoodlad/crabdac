@@ -41,7 +41,7 @@ mod app {
 
     use crabdac::sai;
 
-    use bbqueue;
+    use bbqueue::{self, GrantR};
     use bytemuck::cast_slice;
 
     use usb_device::prelude::*;
@@ -60,12 +60,16 @@ mod app {
     struct Shared {
         #[lock_free]
         sai_dma_transfer: SaiDmaTransfer,
+
+        #[lock_free]
+        sai_data_rate: u32,
     }
 
     #[local]
     struct Local {
         audio_data_producer: bbqueue::Producer<'static, BUFFER_SIZE>,
         audio_data_consumer: bbqueue::Consumer<'static, BUFFER_SIZE>,
+        audio_data_read_grant: Option<GrantR<'static, BUFFER_SIZE>>,
 
         usb_dev: UsbDevice<'static, UsbBusType>,
         usb_audio: SimpleStereoOutput<'static, UsbBusType>,
@@ -78,8 +82,8 @@ mod app {
     const SAMPLE_RATE: u32 = 96000;
     const SLOT_SIZE: u32 = 32;
     const USB_FRAME_RATE: u32 = 1000;
-    const USB_AUDIO_FRAME_SIZE: usize = ((SAMPLE_RATE / USB_FRAME_RATE) + 1 * CHANNELS * SLOT_SIZE / 8) as usize;
-    const BUFFER_SIZE: usize = USB_AUDIO_FRAME_SIZE * 2;
+    const USB_AUDIO_FRAME_SIZE: usize = (((SAMPLE_RATE / USB_FRAME_RATE) + 1) * CHANNELS * SLOT_SIZE / 8) as usize;
+    const BUFFER_SIZE: usize = USB_AUDIO_FRAME_SIZE * 3;
     const SAI_DMA_SIZE: usize = 256 as usize;
 
     #[init(local = [
@@ -130,8 +134,9 @@ mod app {
             gpioc.pc0.into_alternate(),
         );
 
-        let sai_transmitter: SaiTx = sai::Blocks::new(cx.device.SAI1, &clocks)
+        let mut sai_transmitter: SaiTx = sai::Blocks::new(cx.device.SAI1, &clocks)
             .b.master_transmitter(sai_pins);
+        sai_transmitter.configure();
 
         let mute_buffer: &'static [u32] = cx.local.mute_buffer;
         let mut sai_dma_transfer = Transfer::init_memory_to_peripheral(
@@ -157,15 +162,15 @@ mod app {
             hclk: clocks.hclk(),
         };
 
-        cortex_m::asm::delay(clocks.hclk().0);
-
         *cx.local.usb_bus = Some(UsbBus::new(usb, cx.local.usb_ep_memory));
+
         let usb_audio = SimpleStereoOutput::new(
             cx.local.usb_bus.as_ref().unwrap(),
             SAMPLE_RATE,
             SLOT_SIZE as usize / 8,
             24,
         );
+
         let usb_dev = UsbDeviceBuilder::new(cx.local.usb_bus.as_ref().unwrap(), UsbVidPid(0x1209, 0x0001))
             .manufacturer("Crabs Pty Ltd.")
             .product("CrabDAC")
@@ -175,15 +180,19 @@ mod app {
             .self_powered(true)
             .build();
 
+        print_sai_data_rate::spawn_after(1.secs()).unwrap();
+
         defmt::info!("INIT :: Finished");
 
         (
             Shared {
                 sai_dma_transfer,
+                sai_data_rate: 0,
             },
             Local {
                 audio_data_producer,
                 audio_data_consumer,
+                audio_data_read_grant: None,
                 usb_dev,
                 usb_audio,
             },
@@ -201,30 +210,44 @@ mod app {
     }
 
     #[task(binds = DMA2_STREAM4,
-           local = [audio_data_consumer],
+           local = [audio_data_consumer, audio_data_read_grant],
            shared = [sai_dma_transfer])]
     fn sai_dma_handler(cx: sai_dma_handler::Context) {
         let consumer: &mut bbqueue::Consumer<'static, BUFFER_SIZE> = cx.local.audio_data_consumer;
+        let old_grant: &mut Option<bbqueue::GrantR<'static, BUFFER_SIZE>> = cx.local.audio_data_read_grant;
         let transfer = cx.shared.sai_dma_transfer;
 
         if Stream4::<pac::DMA2>::get_transfer_complete_flag() {
             transfer.clear_transfer_complete_interrupt();
 
-            consumer.read().map(|grant| {
-                let bytes: &'static [u8] = if grant.len() > 8 {
-                    unsafe { &grant.as_static_buf()[0..8] }
-                } else {
-                    unsafe { &grant.as_static_buf() }
-                };
-                let words: &'static [u32] = cast_slice(bytes);
+            match old_grant.take() {
+                Some(g) => {
+                    defmt::debug!("SAI :: Dropping a grant of {} bytes", g.len());
+                    drop(g);
+                },
+                None => {}
+            }
 
-                unsafe {
-                    transfer.next_transfer_with(|_, _| {
-                        (words, ())
-                    }).unwrap();
+            match consumer.read() {
+                Ok(mut grant) => {
+                    defmt::debug!("SAI :: Processing a grant of {} bytes", grant.len());
+                    let bytes: &'static [u8] = if grant.len() > SAI_DMA_SIZE {
+                        grant.to_release(SAI_DMA_SIZE);
+                        unsafe { &grant.as_static_buf()[0..SAI_DMA_SIZE] }
+                    } else {
+                        grant.to_release(grant.len());
+                        unsafe { &grant.as_static_buf() }
+                    };
+                    old_grant.replace(grant);
+                    let words: &'static [u32] = cast_slice(bytes);
+                    unsafe { transfer.next_transfer_with(|_, _| (words, ())).unwrap(); }
+
+                    //increment_sai_data_rate::spawn(words.len() as u32 * 4).unwrap();
+                },
+                Err(_) => {
+                    unsafe { transfer.next_transfer_with(|buf, _| (buf, ())).unwrap(); }
                 }
-                grant.release(8);
-            }).unwrap();
+            }
 
         }
     }
@@ -239,10 +262,33 @@ mod app {
             if usb_audio.audio_data_available {
                 producer.grant_exact(USB_AUDIO_FRAME_SIZE).and_then(|mut grant| {
                     let bytes_received = usb_audio.read_audio_data(&mut grant).unwrap();
+                    defmt::debug!("USB :: received {} bytes of audio data", bytes_received);
+                    increment_sai_data_rate::spawn(bytes_received as u32).unwrap();
                     grant.commit(bytes_received);
                     Ok(())
                 }).unwrap();
             }
+
+            if usb_audio.audio_feedback_needed {
+                match usb_audio.write_raw_feedback(0x17ffe) {
+                    Ok(_) => defmt::debug!("Feedback OK"),
+                    Err(_) => defmt::debug!("Feedback ERR"),
+                }
+            }
         }
+    }
+
+    #[task(priority = 1, shared = [sai_data_rate])]
+    fn print_sai_data_rate(cx: print_sai_data_rate::Context) {
+        print_sai_data_rate::spawn_after(1.secs()).unwrap();
+
+        let sai_data_rate = *cx.shared.sai_data_rate;
+        defmt::info!("SAI Data Rate: {} bytes/second", sai_data_rate);
+        *cx.shared.sai_data_rate = 0;
+    }
+
+    #[task(priority = 1, shared = [sai_data_rate])]
+    fn increment_sai_data_rate(cx: increment_sai_data_rate::Context, count: u32) {
+        *cx.shared.sai_data_rate += count;
     }
 }

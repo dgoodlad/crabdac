@@ -154,6 +154,11 @@ where
         self.ep_feedback.write(buffer)
     }
 
+    pub fn write_raw_feedback(&mut self, value: u32) -> Result<usize, UsbError> {
+        let buffer: &[u8] = &value.to_le_bytes()[0..3];
+        self.ep_feedback.write(buffer)
+    }
+
     fn set_alt(&mut self, alt: u8) {
         if alt != self.alt_setting {
             if alt == 0 { self.disable_stream(); }
@@ -169,7 +174,7 @@ where
     }
 
     fn disable_stream(&mut self) {
-        defmt::info!("Disabling audio stream");
+        //defmt::info!("Disabling audio stream");
         self.enable_disable.replace(StreamingState::Disabled);
         self.audio_feedback_needed = false;
     }
@@ -387,7 +392,7 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
                 match request.request {
                     control::Request::GET_INTERFACE => {
                         if request.index as u8 == self.if_audio_stream.into() {
-                            xfer.accept_with(&[0]).unwrap();
+                            xfer.accept_with(&[self.alt_setting]).unwrap();
                         }
                     },
                     _ => { return; }
@@ -491,7 +496,7 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
     }
 
     fn endpoint_in_complete(&mut self, addr: EndpointAddress) {
-        defmt::info!("Endpoint IN! {:?}", defmt::Debug2Format(&addr));
+        defmt::debug!("Endpoint IN! {:?}", defmt::Debug2Format(&addr.index()));
         self.audio_feedback_needed = true;
     }
 }
