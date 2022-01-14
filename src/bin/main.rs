@@ -252,7 +252,7 @@ mod app {
                     let words: &'static [u32] = cast_slice(bytes);
                     unsafe { transfer.next_transfer_with(|_, _| (words, ())).unwrap(); }
 
-                    //increment_sai_data_rate::spawn(words.len() as u32 * 4).unwrap();
+                    increment_sai_data_rate::spawn(words.len() as u32 * 4).unwrap();
                 },
                 Err(_) => {
                     unsafe { transfer.next_transfer_with(|buf, _| (buf, ())).unwrap(); }
@@ -281,7 +281,7 @@ mod app {
                 producer.grant_exact(USB_AUDIO_FRAME_SIZE).and_then(|mut grant| {
                     let bytes_received = usb_audio.read_audio_data(&mut grant).unwrap();
                     defmt::debug!("USB :: received {} bytes of audio data", bytes_received);
-                    increment_sai_data_rate::spawn(bytes_received as u32).unwrap();
+                    //increment_sai_data_rate::spawn(bytes_received as u32).unwrap();
                     grant.commit(bytes_received);
                     Ok(())
                 }).unwrap();
