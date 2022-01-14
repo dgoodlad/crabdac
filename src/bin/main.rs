@@ -5,7 +5,7 @@ use crabdac as _;
 
 #[rtic::app(device = stm32f4xx_hal::pac, dispatchers = [SPI2])]
 mod app {
-    use crabdac::{hal, uac::simple_stereo_output::SimpleStereoOutput};
+    use crabdac::{hal, uac::{simple_stereo_output::SimpleStereoOutput, ClockCounter}, timer::{UsbAudioFrequencyFeedback, CaptureChannel}};
     use hal::{
         prelude::*,
         pac,
@@ -63,6 +63,8 @@ mod app {
 
         #[lock_free]
         sai_data_rate: u32,
+
+        feedback_clock_counter: u32,
     }
 
     #[local]
@@ -73,6 +75,8 @@ mod app {
 
         usb_dev: UsbDevice<'static, UsbBusType>,
         usb_audio: SimpleStereoOutput<'static, UsbBusType>,
+
+        audio_feedback_timer: UsbAudioFrequencyFeedback<pac::TIM2, PB8<Alternate<PushPull, 1>>>,
     }
 
     #[monotonic(binds = TIM5, default = true)]
@@ -83,7 +87,7 @@ mod app {
     const SLOT_SIZE: u32 = 32;
     const USB_FRAME_RATE: u32 = 1000;
     const USB_AUDIO_FRAME_SIZE: usize = (((SAMPLE_RATE / USB_FRAME_RATE) + 1) * CHANNELS * SLOT_SIZE / 8) as usize;
-    const BUFFER_SIZE: usize = USB_AUDIO_FRAME_SIZE * 3;
+    const BUFFER_SIZE: usize = USB_AUDIO_FRAME_SIZE * 4;
     const SAI_DMA_SIZE: usize = 256 as usize;
 
     #[init(local = [
@@ -182,12 +186,17 @@ mod app {
 
         print_sai_data_rate::spawn_after(1.secs()).unwrap();
 
+        let audio_feedback_timer: UsbAudioFrequencyFeedback<pac::TIM2, PB8<Alternate<PushPull, 1>>> =
+            UsbAudioFrequencyFeedback::new(cx.device.TIM2, CaptureChannel::Channel1, gpiob.pb8.into_alternate());
+        audio_feedback_timer.start();
+
         defmt::info!("INIT :: Finished");
 
         (
             Shared {
                 sai_dma_transfer,
                 sai_data_rate: 0,
+                feedback_clock_counter: (256 * SAMPLE_RATE * 4 / USB_FRAME_RATE) << 4, // number of mclk pulses (256 * F_s) in 4 usb frames
             },
             Local {
                 audio_data_producer,
@@ -195,6 +204,7 @@ mod app {
                 audio_data_read_grant: None,
                 usb_dev,
                 usb_audio,
+                audio_feedback_timer,
             },
             init::Monotonics(mono),
         )
@@ -252,40 +262,21 @@ mod app {
         }
     }
 
-    #[task(binds = OTG_HS, local = [audio_data_producer, usb_dev, usb_audio])]
+    #[task(binds = OTG_HS, local = [audio_data_producer, usb_dev, usb_audio], shared = [feedback_clock_counter])]
     fn usb_handler(cx: usb_handler::Context) {
         let producer: &mut bbqueue::Producer<'static, BUFFER_SIZE> = cx.local.audio_data_producer;
         let usb_dev: &mut UsbDevice<UsbBusType> = cx.local.usb_dev;
         let usb_audio: &mut SimpleStereoOutput<UsbBusType> = cx.local.usb_audio;
-
-        cortex_m::interrupt::free(|_cs| {
-            let otg_device = unsafe { &*pac::OTG_HS_DEVICE::ptr() };
-            let otg_global = unsafe { &*pac::OTG_HS_GLOBAL::ptr() };
-            if otg_global.gintsts.read().iisoixfr().bit_is_set() {
-                otg_global.gintsts.modify(|_,w| w.iisoixfr().set_bit());
-                otg_device.diepint1.modify(|r,w| unsafe {
-                    w.bits(r.bits())
-                });
-
-                otg_device.diepctl1.modify(|_,w| w
-                                           .snak().set_bit()
-                                           .epdis().set_bit()
-                );
-                while otg_device.diepint1.read().epdisd().bit_is_clear() {}
-
-                otg_global.grstctl.modify(|_,w| unsafe {
-                    w.txfflsh().set_bit().txfnum().bits(0x01)
-                });
-                while otg_global.grstctl.read().txfflsh().bit_is_set() {}
-            }
-
-            if otg_global.gintsts.read().sof().bit_is_set() {
-                otg_global.gintsts.write(|w| w.sof().set_bit());
-                usb_audio.write_raw_feedback(0x18000).ok();
-            }
-        });
+        let mut feedback_clock_counter = cx.shared.feedback_clock_counter;
 
         while usb_dev.poll(&mut [usb_audio]) {
+            if usb_audio.audio_feedback_needed {
+                match usb_audio.write_raw_feedback(feedback_clock_counter.lock(|i| *i)) {
+                    Ok(_) => defmt::debug!("Feedback OK"),
+                    Err(_) => defmt::info!("Feedback ERR"),
+                }
+            }
+
             if usb_audio.audio_data_available {
                 producer.grant_exact(USB_AUDIO_FRAME_SIZE).and_then(|mut grant| {
                     let bytes_received = usb_audio.read_audio_data(&mut grant).unwrap();
@@ -294,13 +285,6 @@ mod app {
                     grant.commit(bytes_received);
                     Ok(())
                 }).unwrap();
-            }
-
-            if usb_audio.audio_feedback_needed {
-                match usb_audio.write_raw_feedback(0x17ffe) {
-                    Ok(_) => defmt::debug!("Feedback OK"),
-                    Err(_) => defmt::debug!("Feedback ERR"),
-                }
             }
         }
     }
@@ -317,5 +301,24 @@ mod app {
     #[task(priority = 1, shared = [sai_data_rate])]
     fn increment_sai_data_rate(cx: increment_sai_data_rate::Context, count: u32) {
         *cx.shared.sai_data_rate += count;
+    }
+
+    #[task(binds = TIM2, local = [audio_feedback_timer], shared = [feedback_clock_counter])]
+    fn tim2(mut cx: tim2::Context) {
+        static mut COUNTER: ClockCounter = ClockCounter{ticks: 0, frames: 0, mck_to_fs_ratio: 8};
+
+        let count = cx.local.audio_feedback_timer.get_count();
+        match count {
+            None => defmt::warn!("TIM2 interrupt but no count"),
+            Some(i) => {
+                unsafe {
+                    COUNTER.add(i);
+                    if COUNTER.frames >= 4 {
+                        cx.shared.feedback_clock_counter.lock(|counter| *counter = COUNTER.ticks << 4);
+                        COUNTER.clear();
+                    }
+                }
+            }
+        }
     }
 }

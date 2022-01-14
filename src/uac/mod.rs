@@ -11,9 +11,9 @@ pub enum StreamingState {
 
 #[derive(Debug)]
 pub struct ClockCounter {
-    ticks: u32,
-    frames: u8,
-    mck_to_fs_ratio: u8,
+    pub ticks: u32,
+    pub frames: u8,
+    pub mck_to_fs_ratio: u8,
 }
 
 impl ClockCounter {

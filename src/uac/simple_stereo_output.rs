@@ -2,6 +2,9 @@ use usb_device::{
     class_prelude::*,
     endpoint::{Endpoint, Out, In}
 };
+
+use crate::hal::pac;
+
 use crate::uac::{descriptors::{AudioControlAllocator, descriptor_type::CS_INTERFACE, feature_unit_control_selector::{FU_MUTE_CONTROL, FU_VOLUME_CONTROL}, clock_source_control_selectors}, request::{RequestCode, Target}};
 
 use super::{descriptors::{
@@ -109,7 +112,9 @@ where
             // > a period of 8 frames (2^4-1).
             //
             // 2^2 = 2^(3-1) therefore bInterval = 3
-            3,
+            //3,
+            // HACK tinyusb sets this to 1; let's give it a go.
+            1,
         );
 
         let mut entity_allocator = AudioControlAllocator::new();
@@ -155,7 +160,14 @@ where
     }
 
     pub fn write_raw_feedback(&mut self, value: u32) -> Result<usize, UsbError> {
-        let buffer: &[u8] = &value.to_le_bytes()[0..3];
+        defmt::debug!("usb audio feedback :: frame {:x}", unsafe {
+            let otg_device = &*pac::OTG_HS_DEVICE::ptr();
+            otg_device.dsts.read().fnsof().bits()
+        });
+
+        let buffer: &[u8] = &value.to_ne_bytes()[0..3];
+        defmt::debug!("usb audio feedback :: value {:x}", buffer);
+        self.audio_feedback_needed = false;
         self.ep_feedback.write(buffer)
     }
 
@@ -311,12 +323,60 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
         None
     }
 
-    fn reset(&mut self) {}
+    fn reset(&mut self) {
+        let otg_device = unsafe { &*pac::OTG_HS_DEVICE::ptr() };
+        let otg_global = unsafe { &*pac::OTG_HS_GLOBAL::ptr() };
 
-    fn poll(&mut self) {}
+        // Unmask a couple extra interrupts:
+        // * IISOIXFRM - incomplete isochronous IN transfers
+        // * EOPF - end of periodic frame
+        otg_global.gintmsk.modify(|_,w| {
+            w
+                .iisoixfrm().set_bit()
+                //.eopfm().set_bit()
+        });
+    }
+
+    fn poll(&mut self) {
+        let otg_device = unsafe { &*pac::OTG_HS_DEVICE::ptr() };
+        let otg_global = unsafe { &*pac::OTG_HS_GLOBAL::ptr() };
+        if otg_global.gintsts.read().iisoixfr().bit_is_set() {
+            defmt::info!("IISOIXFR: {:b}", otg_device.diepint1.read().bits());
+            otg_global.gintsts.write(|w| w.iisoixfr().set_bit());
+
+            if otg_device.diepint1.read().nak().bit_is_set() {
+                // Set the endpoint to NAK mode
+                otg_device.diepctl1.modify(|_,w| w.snak().set_bit());
+                while otg_device.diepint1.read().inepne().bit_is_clear() {}
+
+                // Disable the endpoint
+                otg_device.diepctl1.modify(|_,w| w
+                                            .snak().set_bit()
+                                            .epdis().set_bit()
+                );
+                while otg_device.diepint1.read().epdisd().bit_is_clear() {}
+                otg_device.diepint1.modify(|_,w| w.epdisd().set_bit());
+                assert!(otg_device.diepctl1.read().epena().bit_is_clear());
+                assert!(otg_device.diepctl1.read().epdis().bit_is_clear());
+
+                // Read OTG_DIEPTSIZx to find out how much data was actually written
+                // to the USB
+                //otg_device.dieptsiz1.read().bits();
+
+                // Flush the TX FIFO
+                otg_global.grstctl.modify(|_,w| unsafe {
+                    w.txfflsh().set_bit().txfnum().bits(0x01)
+                });
+                while otg_global.grstctl.read().txfflsh().bit_is_set() {}
+
+                self.audio_feedback_needed = true;
+            }
+        }
+    }
 
     fn control_out(&mut self, xfer: ControlOut<B>) {
         let request = xfer.request();
+        defmt::info!("usb :: {:?}", defmt::Debug2Format(request));
 
         match request.request_type {
             control::RequestType::Standard => {
@@ -328,9 +388,10 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
                                 1 => xfer.accept().map(|_| self.set_alt(1) ).unwrap(),
                                 _ => { xfer.reject().unwrap(); },
                             }
+                            defmt::info!("SET_INTERFACE {}", self.alt_setting);
                         }
                     },
-                    _ => { return; },
+                    _ => { defmt::debug!("Unknown standard request {:?}", defmt::Debug2Format(request)); },
                 }
             },
             control::RequestType::Class => {
@@ -383,6 +444,7 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
 
     fn control_in(&mut self, xfer: ControlIn<B>) {
         let request = xfer.request();
+        defmt::info!("usb :: {:?}", defmt::Debug2Format(request));
 
         match request.request_type {
             control::RequestType::Vendor |
@@ -395,7 +457,7 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
                             xfer.accept_with(&[self.alt_setting]).unwrap();
                         }
                     },
-                    _ => { return; }
+                    _ => { defmt::debug!("Unknown standard request {:?}", defmt::Debug2Format(request)); },
                 }
             },
 
@@ -464,6 +526,7 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
                             }
                         } else if interface_number == self.if_audio_stream.into() && entity_id == None {
                             if cs_request.control_selector == AS_ACT_ALT_SETTING_CONTROL {
+                                defmt::info!("GET ALT_SETTING_CONTROL {}", self.alt_setting);
                                 return xfer.accept_with(&[self.alt_setting]).unwrap();
                             } else if cs_request.control_selector == AS_VAL_ALT_SETTINGS_CONTROL {
                                 return xfer.accept_with(&[
