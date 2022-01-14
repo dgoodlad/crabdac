@@ -88,7 +88,7 @@ mod app {
     const USB_FRAME_RATE: u32 = 1000;
     const USB_AUDIO_FRAME_SIZE: usize = (((SAMPLE_RATE / USB_FRAME_RATE) + 1) * CHANNELS * SLOT_SIZE / 8) as usize;
     const BUFFER_SIZE: usize = USB_AUDIO_FRAME_SIZE * 4;
-    const SAI_DMA_SIZE: usize = 256 as usize;
+    const SAI_DMA_SIZE: usize = 64 as usize;
 
     #[init(local = [
         mute_buffer: [u32; SAI_DMA_SIZE] = [0; SAI_DMA_SIZE],
