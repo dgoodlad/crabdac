@@ -22,13 +22,13 @@ bytemuck = "1.7.3"
 
 [patch.crates-io]
 # Support isochronous endpoints
-usb-device = { path = "../usb-device" }
+usb-device = { git = "https://github.com/dgoodlad/usb-device", branch = "crabdac" }
 # Support isochronous endpoints
-synopsys-usb-otg = { path = "../synopsys-usb-otg" }
+synopsys-usb-otg = { git = "https://github.com/dgoodlad/synopsys-usb-otg", branch = "isochronous" }
 # Support ITM1_RMP in TIM2_OR
-stm32f4 = { path = "../../stm32-rs/stm32f4" }
+stm32f4 = { path = "./stm32f4" }
 # Fix SAI PLL, add rcc::Enable + rcc::Reset to SAIx peripherals
-stm32f4xx-hal = { path = "../../stm32f4xx-hal" }
+stm32f4xx-hal = { git = "https://github.com/dgoodlad/stm32f4xx-hal", branch = "prevent-overflows-in-sai-pll-search" }
 
 [features]
 # set logging levels here
