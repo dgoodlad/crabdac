@@ -338,6 +338,34 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
     }
 
     fn poll(&mut self) {
+        // The synopsys crate (and usb-device above that) doesn't support
+        // reporting incomplete isochronous IN transfers. We've got to trap them
+        // ourselves and follow the procedure from the reference manual to reset
+        // the endpoint. Once that's done, we can immediately re-attempt to
+        // transmit.
+        //
+        // Tokens    Interrupts        Action
+        //
+        // SOF
+        // ...
+        // IN 1
+        //           EP1 TXFE
+        // ...
+        //           EOPF &
+        //           IISOIXFR          Disable & reset endpoint;
+        //                             Fill EP1 TX FIFO (write to endpoint)
+        // ...
+        // SOF
+        // ...
+        // IN                          Core transmits from TX FIFO
+        //           XFRC              Fill EP1 TX FIFO (write to endpoint)
+        // ...
+        // SOF
+        // ...
+        // IN                          Core transmits from TX FIFO
+        //           XFRC              Fill EP1 TX FIFO (write to endpoint)
+        // ...
+        //
         let otg_device = unsafe { &*pac::OTG_HS_DEVICE::ptr() };
         let otg_global = unsafe { &*pac::OTG_HS_GLOBAL::ptr() };
         if otg_global.gintsts.read().iisoixfr().bit_is_set() {
@@ -359,16 +387,13 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
                 assert!(otg_device.diepctl1.read().epena().bit_is_clear());
                 assert!(otg_device.diepctl1.read().epdis().bit_is_clear());
 
-                // Read OTG_DIEPTSIZx to find out how much data was actually written
-                // to the USB
-                //otg_device.dieptsiz1.read().bits();
-
                 // Flush the TX FIFO
                 otg_global.grstctl.modify(|_,w| unsafe {
                     w.txfflsh().set_bit().txfnum().bits(0x01)
                 });
                 while otg_global.grstctl.read().txfflsh().bit_is_set() {}
 
+                // We're ready to retry sending the feedback packet again
                 self.audio_feedback_needed = true;
             }
         }
