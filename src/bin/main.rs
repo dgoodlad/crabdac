@@ -14,7 +14,7 @@ mod app {
             config::DmaConfig,
             traits::StreamISR,
             MemoryToPeripheral,
-            Stream4,
+            Stream5,
             StreamsTuple,
             Transfer,
         },
@@ -24,7 +24,6 @@ mod app {
             gpiob::{self, *},
             gpioc::{self, *},
             Alternate,
-            PushPull,
         },
 
         otg_hs::{
@@ -33,13 +32,8 @@ mod app {
             UsbBusType,
         },
 
-        timer::{
-            Timer,
-            monotonic::MonoTimer,
-        }
+        timer::MonoTimerUs,
     };
-
-    use crabdac::sai;
 
     use bbqueue::{self, GrantR};
     use bytemuck::cast_slice;
@@ -47,26 +41,38 @@ mod app {
     use usb_device::prelude::*;
     use usb_device::bus::UsbBusAllocator;
 
-    type SaiPins = (
-        // SCK
-        PB12<Alternate<PushPull, 6>>,
-        // FS
-        PB9<Alternate<PushPull, 6>>,
-        // SD
-        PA9<Alternate<PushPull, 6>>,
+    use stm32_i2s_v12x::{self, TransmitMode, MasterConfig, format::{Data24Frame32, FrameFormat}, Polarity};
+
+    type I2sPins = (
+        // WS
+        PA15<Alternate<5>>,
+        // CK
+        PA5<Alternate<5>>,
         // MCLK
-        PC0<Alternate<PushPull, 6>>,
+        PC4<Alternate<5>>,
+        // SD
+        PA7<Alternate<5>>,
     );
-    type SaiTx = sai::Transmitter<sai::BlockB<pac::SAI1>, SaiPins, sai::Master>;
-    type SaiDmaTransfer = Transfer<Stream4<pac::DMA2>, SaiTx, MemoryToPeripheral, &'static [u32], 1>;
+
+    type I2sTx = stm32_i2s_v12x::I2s<hal::i2s::I2s<pac::SPI1, I2sPins>, TransmitMode<Data24Frame32>>;
+
+    type I2sDmaTransfer = Transfer<
+        Stream5<pac::DMA2>,
+        I2sTx,
+        MemoryToPeripheral,
+        &'static [u16],
+        3
+    >;
 
     #[shared]
     struct Shared {
         #[lock_free]
-        sai_dma_transfer: SaiDmaTransfer,
+        i2s_dma_transfer: I2sDmaTransfer,
+        //sai_dma_transfer: SaiDmaTransfer,
 
         #[lock_free]
-        sai_data_rate: u32,
+        i2s_data_rate: u32,
+        //sai_data_rate: u32,
 
         feedback_clock_counter: u32,
     }
@@ -80,11 +86,11 @@ mod app {
         usb_dev: UsbDevice<'static, UsbBusType>,
         usb_audio: SimpleStereoOutput<'static, UsbBusType>,
 
-        audio_feedback_timer: UsbAudioFrequencyFeedback<pac::TIM2, PB8<Alternate<PushPull, 1>>>,
+        audio_feedback_timer: UsbAudioFrequencyFeedback<pac::TIM2, PB8<Alternate<1>>>,
     }
 
     #[monotonic(binds = TIM5, default = true)]
-    type MicrosecMono = MonoTimer<pac::TIM5, 1_000_000>;
+    type MicrosecMono = MonoTimerUs<pac::TIM5>;
 
     const CHANNELS: u32 = 2;
     const SAMPLE_RATE: u32 = 96000;
@@ -92,10 +98,11 @@ mod app {
     const USB_FRAME_RATE: u32 = 1000;
     const USB_AUDIO_FRAME_SIZE: usize = (((SAMPLE_RATE / USB_FRAME_RATE) + 1) * CHANNELS * SLOT_SIZE / 8) as usize;
     const BUFFER_SIZE: usize = USB_AUDIO_FRAME_SIZE * 4;
-    const SAI_DMA_SIZE: usize = 64 as usize;
+    //const SAI_DMA_SIZE: usize = 64 as usize;
+    const I2S_DMA_SIZE: usize = 64 as usize;
 
     #[init(local = [
-        mute_buffer: [u32; SAI_DMA_SIZE] = [0; SAI_DMA_SIZE],
+        mute_buffer: [u16; I2S_DMA_SIZE] = [0; I2S_DMA_SIZE],
         audio_data_buffer: bbqueue::BBBuffer<BUFFER_SIZE> = bbqueue::BBBuffer::new(),
         usb_bus: Option<UsbBusAllocator<UsbBusType>> = None,
         usb_ep_memory: [u32; 1024] = [0; 1024],
@@ -105,26 +112,25 @@ mod app {
 
         let rcc: hal::rcc::Rcc = cx.device.RCC.constrain();
         let clocks = rcc.cfgr
-            .use_hse(8.mhz())
-            .sysclk(168.mhz())
-            .hclk(168.mhz())
-            .pclk1(42.mhz())
-            .pclk2(84.mhz())
-            .sai1_clk(49152.khz())
+            .use_hse(8.MHz())
+            .sysclk(168.MHz())
+            .hclk(168.MHz())
+            .pclk1(42.MHz())
+            .pclk2(84.MHz())
+            .i2s_apb1_clk(49152.kHz())
             .require_pll48clk()
             .freeze();
 
         assert!(clocks.is_pll48clk_valid());
-        //assert!((clocks.sai1_clk().unwrap().0 as f64 - 49152.khz().0 as f64) / (49152.khz().0 as f64) < 0.0002);
 
         defmt::info!("INIT :: Clocks configured.");
-        defmt::info!("INIT ::   HCLK          : {}", clocks.hclk().0);
-        defmt::info!("INIT ::   PCLK1         : {}", clocks.pclk1().0);
-        defmt::info!("INIT ::   PCLK2         : {}", clocks.pclk2().0);
-        defmt::info!("INIT ::   USB (pll48clk): {}", clocks.pll48clk().map(|h| h.0));
-        defmt::info!("INIT ::   SAI (sai1_clk): {}", clocks.sai1_clk().map(|h| h.0));
+        defmt::info!("INIT ::   HCLK          : {}", clocks.hclk().raw());
+        defmt::info!("INIT ::   PCLK1         : {}", clocks.pclk1().raw());
+        defmt::info!("INIT ::   PCLK2         : {}", clocks.pclk2().raw());
+        defmt::info!("INIT ::   USB (pll48clk): {}", clocks.pll48clk().map(|h| h.raw()));
+        defmt::info!("INIT ::   I2S           : {}", clocks.i2s_apb1_clk().map(|h| h.raw()));
 
-        let mono = Timer::new(cx.device.TIM5, &clocks).monotonic();
+        let mono = cx.device.TIM5.monotonic_us(&clocks);
 
         defmt::info!("INIT :: Allocating audio data buffer");
         let (audio_data_producer, audio_data_consumer) = cx.local.audio_data_buffer.try_split().unwrap();
@@ -134,22 +140,30 @@ mod app {
         let gpioc: gpioc::Parts = cx.device.GPIOC.split();
 
 
-        defmt::info!("INIT :: Configuring SAI");
-        let sai_pins: SaiPins = (
-            gpiob.pb12.into_alternate(),
-            gpiob.pb9.into_alternate(),
-            gpioa.pa9.into_alternate(),
-            gpioc.pc0.into_alternate(),
+        defmt::info!("INIT :: Configuring I2S");
+        let i2s_pins: I2sPins = (
+            gpioa.pa15.into_alternate(),
+            gpioa.pa5.into_alternate(),
+            gpioc.pc4.into_alternate(),
+            gpioa.pa7.into_alternate(),
         );
 
-        let mut sai_transmitter: SaiTx = sai::Blocks::new(cx.device.SAI1, &clocks)
-            .b.master_transmitter(sai_pins);
-        sai_transmitter.configure();
+        let hal_i2s = cx.device.SPI1.i2s(i2s_pins, &clocks);
+        let i2s_transmitter: I2sTx = stm32_i2s_v12x::I2s::new(hal_i2s)
+            .configure_master_transmit(
+                MasterConfig::with_sample_rate(
+                clocks.i2s_apb1_clk().unwrap().raw(),
+                96000,
+                Data24Frame32,
+                FrameFormat::MsbJustified,
+                Polarity::IdleHigh,
+                stm32_i2s_v12x::MasterClock::Enable,
+            ));
 
-        let mute_buffer: &'static [u32] = cx.local.mute_buffer;
-        let mut sai_dma_transfer = Transfer::init_memory_to_peripheral(
-            StreamsTuple::new(cx.device.DMA2).4,
-            sai_transmitter,
+        let mute_buffer: &'static [u16] = cx.local.mute_buffer;
+        let mut i2s_dma_transfer = Transfer::init_memory_to_peripheral(
+            StreamsTuple::new(cx.device.DMA2).5,
+            i2s_transmitter,
             mute_buffer,
             None,
             DmaConfig::default()
@@ -157,8 +171,7 @@ mod app {
                 .memory_increment(true)
                 .transfer_complete_interrupt(true),
         );
-        sai_dma_transfer.start(|tx| tx.enable());
-
+        i2s_dma_transfer.start(|tx| tx.enable());
 
         defmt::info!("INIT :: Configuring USB");
         let usb = USB {
@@ -188,9 +201,9 @@ mod app {
             .self_powered(true)
             .build();
 
-        print_sai_data_rate::spawn_after(1.secs()).unwrap();
+        print_i2s_data_rate::spawn_after(1.secs()).unwrap();
 
-        let audio_feedback_timer: UsbAudioFrequencyFeedback<pac::TIM2, PB8<Alternate<PushPull, 1>>> =
+        let audio_feedback_timer: UsbAudioFrequencyFeedback<pac::TIM2, PB8<Alternate<1>>> =
             UsbAudioFrequencyFeedback::new(cx.device.TIM2, CaptureChannel::Channel1, gpiob.pb8.into_alternate());
         audio_feedback_timer.start();
 
@@ -198,8 +211,8 @@ mod app {
 
         (
             Shared {
-                sai_dma_transfer,
-                sai_data_rate: 0,
+                i2s_dma_transfer,
+                i2s_data_rate: 0,
                 feedback_clock_counter: (256 * SAMPLE_RATE * 4 / USB_FRAME_RATE) << 4, // number of mclk pulses (256 * F_s) in 4 usb frames
             },
             Local {
@@ -223,20 +236,20 @@ mod app {
         }
     }
 
-    #[task(binds = DMA2_STREAM4,
+    #[task(binds = DMA2_STREAM5,
            local = [audio_data_consumer, audio_data_read_grant],
-           shared = [sai_dma_transfer])]
-    fn sai_dma_handler(cx: sai_dma_handler::Context) {
+           shared = [i2s_dma_transfer])]
+    fn i2s_dma_handler(cx: i2s_dma_handler::Context) {
         let consumer: &mut bbqueue::Consumer<'static, BUFFER_SIZE> = cx.local.audio_data_consumer;
         let old_grant: &mut Option<bbqueue::GrantR<'static, BUFFER_SIZE>> = cx.local.audio_data_read_grant;
-        let transfer = cx.shared.sai_dma_transfer;
+        let transfer = cx.shared.i2s_dma_transfer;
 
-        if Stream4::<pac::DMA2>::get_transfer_complete_flag() {
+        if Stream5::<pac::DMA2>::get_transfer_complete_flag() {
             transfer.clear_transfer_complete_interrupt();
 
             match old_grant.take() {
                 Some(g) => {
-                    defmt::debug!("SAI :: Dropping a grant of {} bytes", g.len());
+                    defmt::debug!("I2S :: Dropping a grant of {} bytes", g.len());
                     drop(g);
                 },
                 None => {}
@@ -244,19 +257,19 @@ mod app {
 
             match consumer.read() {
                 Ok(mut grant) => {
-                    defmt::debug!("SAI :: Processing a grant of {} bytes", grant.len());
-                    let bytes: &'static [u8] = if grant.len() > SAI_DMA_SIZE {
-                        grant.to_release(SAI_DMA_SIZE);
-                        unsafe { &grant.as_static_buf()[0..SAI_DMA_SIZE] }
+                    defmt::debug!("I2S :: Processing a grant of {} bytes", grant.len());
+                    let bytes: &'static [u8] = if grant.len() > I2S_DMA_SIZE {
+                        grant.to_release(I2S_DMA_SIZE);
+                        unsafe { &grant.as_static_buf()[0..I2S_DMA_SIZE] }
                     } else {
                         grant.to_release(grant.len());
                         unsafe { &grant.as_static_buf() }
                     };
                     old_grant.replace(grant);
-                    let words: &'static [u32] = cast_slice(bytes);
+                    let words: &'static [u16] = cast_slice(bytes);
                     unsafe { transfer.next_transfer_with(|_, _| (words, ())).unwrap(); }
 
-                    increment_sai_data_rate::spawn(words.len() as u32 * 4).unwrap();
+                    increment_i2s_data_rate::spawn(words.len() as u32 * 4).unwrap();
                 },
                 Err(_) => {
                     unsafe { transfer.next_transfer_with(|buf, _| (buf, ())).unwrap(); }
@@ -285,6 +298,7 @@ mod app {
                 producer.grant_exact(USB_AUDIO_FRAME_SIZE).and_then(|mut grant| {
                     let bytes_received = usb_audio.read_audio_data(&mut grant).unwrap();
                     defmt::debug!("USB :: received {} bytes of audio data", bytes_received);
+                    defmt::debug!("USB :: first sample {:x} {:x}", grant[0..4], grant[4..8]);
                     //increment_sai_data_rate::spawn(bytes_received as u32).unwrap();
                     grant.commit(bytes_received);
                     Ok(())
@@ -293,18 +307,18 @@ mod app {
         }
     }
 
-    #[task(priority = 1, shared = [sai_data_rate])]
-    fn print_sai_data_rate(cx: print_sai_data_rate::Context) {
-        print_sai_data_rate::spawn_after(1.secs()).unwrap();
+    #[task(priority = 1, shared = [i2s_data_rate])]
+    fn print_i2s_data_rate(cx: print_i2s_data_rate::Context) {
+        print_i2s_data_rate::spawn_after(1.secs()).unwrap();
 
-        let sai_data_rate = *cx.shared.sai_data_rate;
-        defmt::info!("SAI Data Rate: {} bytes/second", sai_data_rate);
-        *cx.shared.sai_data_rate = 0;
+        let i2s_data_rate = *cx.shared.i2s_data_rate;
+        defmt::info!("I2S Data Rate: {} bytes/second", i2s_data_rate);
+        *cx.shared.i2s_data_rate = 0;
     }
 
-    #[task(priority = 1, shared = [sai_data_rate])]
-    fn increment_sai_data_rate(cx: increment_sai_data_rate::Context, count: u32) {
-        *cx.shared.sai_data_rate += count;
+    #[task(priority = 1, shared = [i2s_data_rate])]
+    fn increment_i2s_data_rate(cx: increment_i2s_data_rate::Context, count: u32) {
+        *cx.shared.i2s_data_rate += count;
     }
 
     #[task(binds = TIM2, local = [audio_feedback_timer], shared = [feedback_clock_counter])]

@@ -16,6 +16,7 @@ defmt-rtt = "0.3.0"
 panic-probe = { version = "0.3.0", features = ["print-defmt"] }
 cortex-m-rtic = "1.0"
 stm32f4xx-hal = { version = "0.12.0", features = ["stm32f446", "rtic", "usb_hs", "i2s"] }
+stm32_i2s_v12x = { version = "0.2.0" }
 usb-device = { version = "0.2.8", features = ["control-buffer-256"] }
 bbqueue = "0.5.1"
 bytemuck = "1.7.3"

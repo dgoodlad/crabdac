@@ -1,5 +1,5 @@
 use stm32f4xx_hal::gpio::gpiob::PB8;
-use stm32f4xx_hal::gpio::{Alternate, PushPull};
+use stm32f4xx_hal::gpio::Alternate;
 use stm32f4xx_hal::pac::RCC;
 use stm32f4xx_hal::rcc::{Enable, Reset, BusTimerClock};
 
@@ -112,7 +112,7 @@ pub enum CaptureChannel {
 }
 
 pub trait ExternalTriggerPin<TIM> {}
-impl ExternalTriggerPin<TIM2> for PB8<Alternate<PushPull, 1>> {}
+impl ExternalTriggerPin<TIM2> for PB8<Alternate<1>> {}
 
 
 pub struct UsbAudioFrequencyFeedback<TIM, PIN> {
