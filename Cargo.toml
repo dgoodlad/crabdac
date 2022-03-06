@@ -15,7 +15,7 @@ defmt = "0.3.0"
 defmt-rtt = "0.3.0"
 panic-probe = { version = "0.3.0", features = ["print-defmt"] }
 cortex-m-rtic = "1.0"
-stm32f4xx-hal = { version = "0.11.1", features = ["stm32f446", "rtic", "usb_hs"] }
+stm32f4xx-hal = { version = "0.12.0", features = ["stm32f446", "rtic", "usb_hs", "i2s"] }
 usb-device = { version = "0.2.8", features = ["control-buffer-256"] }
 bbqueue = "0.5.1"
 bytemuck = "1.7.3"
@@ -27,8 +27,8 @@ usb-device = { git = "https://github.com/dgoodlad/usb-device", branch = "crabdac
 synopsys-usb-otg = { git = "https://github.com/dgoodlad/synopsys-usb-otg", branch = "isochronous" }
 # Support ITM1_RMP in TIM2_OR
 stm32f4 = { path = "./stm32f4" }
-# Fix SAI PLL, add rcc::Enable + rcc::Reset to SAIx peripherals
-stm32f4xx-hal = { git = "https://github.com/dgoodlad/stm32f4xx-hal", branch = "prevent-overflows-in-sai-pll-search" }
+# Upgrade to synopsys-otg 0.3.0
+stm32f4xx-hal = { git = "https://github.com/dgoodlad/stm32f4xx-hal", branch = "synopsys-otg-0.3.0" }
 
 [features]
 # set logging levels here
