@@ -48,9 +48,13 @@ mod app {
     use usb_device::bus::UsbBusAllocator;
 
     type SaiPins = (
+        // SCK
         PB12<Alternate<PushPull, 6>>,
+        // FS
         PB9<Alternate<PushPull, 6>>,
+        // SD
         PA9<Alternate<PushPull, 6>>,
+        // MCLK
         PC0<Alternate<PushPull, 6>>,
     );
     type SaiTx = sai::Transmitter<sai::BlockB<pac::SAI1>, SaiPins, sai::Master>;
