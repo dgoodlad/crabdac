@@ -112,7 +112,7 @@ where
             // > a period of 8 frames (2^4-1).
             //
             // 2^2 = 2^(3-1) therefore bInterval = 3
-            //3,
+            // 3,
             // HACK tinyusb sets this to 1; let's give it a go.
             1,
         );
