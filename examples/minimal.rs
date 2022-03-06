@@ -5,12 +5,10 @@ use crabdac as _;
 
 #[rtic::app(device = stm32f4xx_hal::pac, dispatchers = [SPI2])]
 mod app {
-
-    use hal::timer::Timer;
     use stm32f4xx_hal as hal;
     use hal::prelude::*;
     use hal::pac;
-    use stm32f4xx_hal::timer::monotonic::MonoTimer;
+    use stm32f4xx_hal::timer::MonoTimerUs;
 
     #[shared]
     struct Shared {
@@ -21,7 +19,7 @@ mod app {
     }
 
     #[monotonic(binds = TIM5, default = true)]
-    type MicrosecMono = MonoTimer<pac::TIM5, 1_000_000>;
+    type MicrosecMono = MonoTimerUs<pac::TIM5>;
 
     #[init()]
     fn init(cx: init::Context) -> (Shared, Local, init::Monotonics) {
@@ -29,18 +27,18 @@ mod app {
 
         let rcc = cx.device.RCC.constrain();
         let clocks = rcc.cfgr
-            .use_hse(8.mhz())
-            .sysclk(180.mhz())
-            .hclk(180.mhz())
-            .pclk1(45.mhz())
-            .pclk2(90.mhz())
-            .i2s_apb1_clk(98400.khz())
+            .use_hse(8.MHz())
+            .sysclk(180.MHz())
+            .hclk(180.MHz())
+            .pclk1(45.MHz())
+            .pclk2(90.MHz())
+            .i2s_apb1_clk(98400.kHz())
             .require_pll48clk()
             .freeze();
 
         assert!(clocks.is_pll48clk_valid());
 
-        let mono = Timer::new(cx.device.TIM5, &clocks).monotonic();
+        let mono = cx.device.TIM5.monotonic_us(&clocks);
 
         defmt::info!("INIT :: Finished");
 
