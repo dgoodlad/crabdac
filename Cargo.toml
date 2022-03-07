@@ -20,6 +20,9 @@ stm32_i2s_v12x = { version = "0.2.0" }
 usb-device = { version = "0.2.8", features = ["control-buffer-256"] }
 bbqueue = "0.5.1"
 bytemuck = "1.7.3"
+alloc-cortex-m = { version = "0.4.2" }
+aligned = { version = "0.4.0" }
+fixed = "1.13.1"
 
 [patch.crates-io]
 # Support isochronous endpoints
@@ -30,6 +33,8 @@ synopsys-usb-otg = { git = "https://github.com/dgoodlad/synopsys-usb-otg", branc
 stm32f4 = { path = "./stm32f4" }
 # Upgrade to synopsys-otg 0.3.0
 stm32f4xx-hal = { git = "https://github.com/dgoodlad/stm32f4xx-hal", branch = "synopsys-otg-0.3.0" }
+# Fix compilation
+stm32_i2s_v12x = { git = "https://github.com/samcrow/stm32_i2s", branch = "master" }
 
 [features]
 # set logging levels here
