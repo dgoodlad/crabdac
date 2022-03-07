@@ -33,13 +33,12 @@ mod app {
     use stm32f4xx_hal::dma::Transfer;
     use stm32f4xx_hal::dma::config::DmaConfig;
     use stm32f4xx_hal::gpio::Alternate;
-    use stm32f4xx_hal::gpio::PushPull;
     use stm32f4xx_hal::gpio::gpioa::PA15;
     use stm32f4xx_hal::gpio::gpioc::PC7;
     use stm32f4xx_hal::gpio::gpioc::PC10;
     use stm32f4xx_hal::gpio::gpioc::PC12;
     use stm32f4xx_hal::i2s;
-    use stm32f4xx_hal::{prelude::*, pac, timer::{monotonic::MonoTimer, Timer}};
+    use stm32f4xx_hal::{prelude::*, pac, timer::MonoTimerUs};
     use stm32f4xx_hal::rcc::BusTimerClock;
     //use stm32f4xx_hal::dac;
     //use hal::pac::DAC;
@@ -77,7 +76,7 @@ mod app {
         usb_audio: SimpleStereoOutput<'static, UsbBusType>,
         dma1_stream_7: Option<StreamX<pac::DMA1, 7>>,
         i2s: Option<I2sDevice>,
-        feedback_timer: UsbAudioFrequencyFeedback<pac::TIM2, PB8<Alternate<PushPull, 1>>>,
+        feedback_timer: UsbAudioFrequencyFeedback<pac::TIM2, PB8<Alternate<1>>>,
         onboard_dac: Option<crate::DAC<DualChannel, 12>>,
         onboard_dac_producer: bbqueue::framed::FrameProducer<'static, BUFFER_SIZE>,
         onboard_dac_consumer: bbqueue::framed::FrameConsumer<'static, BUFFER_SIZE>,
@@ -86,7 +85,7 @@ mod app {
     }
 
     #[monotonic(binds = TIM5, default = true)]
-    type MicrosecMono = MonoTimer<pac::TIM5, 1_000_000>;
+    type MicrosecMono = MonoTimerUs<pac::TIM5>;
 
     #[init(local = [audio_queue: bbqueue::BBBuffer<BUFFER_SIZE> = bbqueue::BBBuffer::new(),
                     onboard_dac_queue: bbqueue::BBBuffer<BUFFER_SIZE> = bbqueue::BBBuffer::new(),
@@ -99,27 +98,27 @@ mod app {
 
         let rcc = cx.device.RCC.constrain();
         let clocks = rcc.cfgr
-            .use_hse(8.mhz())
-            .sysclk(96.mhz())
-            .hclk(96.mhz())
-            .pclk1(45.mhz())
-            .pclk2(90.mhz())
-            .i2s_apb1_clk(98400.khz())
+            .use_hse(8.MHz())
+            .sysclk(96.MHz())
+            .hclk(96.MHz())
+            .pclk1(45.MHz())
+            .pclk2(90.MHz())
+            .i2s_apb1_clk(98400.kHz())
             .require_pll48clk()
             .freeze();
 
         assert!(clocks.is_pll48clk_valid());
 
-        defmt::info!("clocks.hclk: {}", clocks.hclk().0);
-        defmt::info!("clocks.pclk1: {}", clocks.pclk1().0);
-        defmt::info!("clocks.pclk2: {}", clocks.pclk2().0);
-        defmt::info!("clocks.pll48clk: {}", clocks.pll48clk().unwrap().0);
-        defmt::info!("clocks.i2s_apb1_clk: {}", clocks.i2s_apb1_clk().unwrap().0);
-        defmt::info!("TIM2 clock: {}", pac::TIM2::timer_clock(&clocks).0);
+        defmt::info!("clocks.hclk: {}", clocks.hclk().raw());
+        defmt::info!("clocks.pclk1: {}", clocks.pclk1().raw());
+        defmt::info!("clocks.pclk2: {}", clocks.pclk2().raw());
+        defmt::info!("clocks.pll48clk: {}", clocks.pll48clk().unwrap().raw());
+        defmt::info!("clocks.i2s_apb1_clk: {}", clocks.i2s_apb1_clk().unwrap().raw());
+        defmt::info!("TIM2 clock: {}", pac::TIM2::timer_clock(&clocks).raw());
 
         defmt::info!("init: monotonic timer");
 
-        let mono = Timer::new(cx.device.TIM5, &clocks).monotonic();
+        let mono = cx.device.TIM5.monotonic_us(&clocks);
 
         let (producer, consumer) = cx.local.audio_queue.try_split_framed().unwrap();
         let (onboard_dac_producer, onboard_dac_consumer) = cx.local.onboard_dac_queue.try_split_framed().unwrap();
@@ -129,9 +128,9 @@ mod app {
         let gpioc = cx.device.GPIOC.split();
 
         // TIM2_ETR
-        let pb8: PB8<Alternate<PushPull, 1>> = gpiob.pb8.into_alternate();
+        let pb8: PB8<Alternate<1>> = gpiob.pb8.into_alternate();
 
-        let feedback_timer: UsbAudioFrequencyFeedback<pac::TIM2, PB8<Alternate<PushPull, 1>>> =
+        let feedback_timer: UsbAudioFrequencyFeedback<pac::TIM2, PB8<Alternate<1>>> =
             UsbAudioFrequencyFeedback::new(cx.device.TIM2, CaptureChannel::Channel1, pb8);
         feedback_timer.start();
 
@@ -182,7 +181,7 @@ mod app {
         let i2s_clock = i2s_periph.input_clock();
 
         let i2s_config = MasterConfig::with_sample_rate(
-            i2s_clock.0,
+            i2s_clock.raw(),
             SAMPLE_RATE,
             Data24Frame32,
             FrameFormat::PhilipsI2s,
@@ -428,10 +427,10 @@ mod app {
     }
 
     type I2sPeripheral = i2s::I2s<pac::SPI3, (
-        PA15<Alternate<PushPull, 6>>,
-        PC10<Alternate<PushPull, 6>>,
-        PC7<Alternate<PushPull, 6>>,
-        PC12<Alternate<PushPull, 6>>,
+        PA15<Alternate<6>>,
+        PC10<Alternate<6>>,
+        PC7<Alternate<6>>,
+        PC12<Alternate<6>>,
     )>;
     type I2sDevice = stm32_i2s_v12x::I2s<I2sPeripheral, TransmitMode<Data24Frame32>>;
     type I2sDmaTransfer = Transfer<Stream7<pac::DMA1>, I2sDevice, MemoryToPeripheral, &'static [u16], 0>;
