@@ -2,10 +2,23 @@
 #![no_std]
 
 use crabdac as _;
+use alloc_cortex_m::CortexMHeap;
+
+#[global_allocator]
+static ALLOCATOR: CortexMHeap = CortexMHeap::empty();
 
 #[rtic::app(device = stm32f4xx_hal::pac, dispatchers = [SPI2])]
 mod app {
-    use crabdac::{hal, uac::{simple_stereo_output::SimpleStereoOutput, ClockCounter}, timer::{UsbAudioFrequencyFeedback, CaptureChannel}};
+    use core::ops::Neg;
+
+    use crabdac::{
+        decibels,
+        hal,
+        uac::{simple_stereo_output::SimpleStereoOutput, ClockCounter},
+        timer::{UsbAudioFrequencyFeedback, CaptureChannel}
+    };
+    use crate::ALLOCATOR;
+
     use hal::{
         prelude::*,
         pac,
@@ -23,7 +36,7 @@ mod app {
             gpioa::{self, *},
             gpiob::{self, *},
             gpioc::{self, *},
-            Alternate,
+            Alternate, NoPin,
         },
 
         otg_hs::{
@@ -32,24 +45,29 @@ mod app {
             UsbBusType,
         },
 
-        timer::MonoTimerUs,
+        timer::MonoTimerUs, i2s::NoMasterClock,
     };
 
+    use aligned::{Aligned, A4};
+
     use bbqueue::{self, GrantR};
-    use bytemuck::cast_slice;
+    use bytemuck::{cast_slice, cast, bytes_of_mut, Pod, cast_slice_mut};
 
     use usb_device::prelude::*;
     use usb_device::bus::UsbBusAllocator;
 
     use stm32_i2s_v12x::{self, TransmitMode, MasterConfig, format::{Data24Frame32, FrameFormat}, Polarity};
 
+    //use dasp::signal;
+    type Sample = fixed::FixedI32<fixed::types::extra::U31>;
+
     type I2sPins = (
         // WS
-        PA15<Alternate<5>>,
+        PA4<Alternate<5>>,
         // CK
         PA5<Alternate<5>>,
         // MCLK
-        PC4<Alternate<5>>,
+        NoMasterClock,
         // SD
         PA7<Alternate<5>>,
     );
@@ -97,11 +115,13 @@ mod app {
     const SLOT_SIZE: u32 = 32;
     const USB_FRAME_RATE: u32 = 1000;
     const USB_AUDIO_FRAME_SIZE: usize = (((SAMPLE_RATE / USB_FRAME_RATE) + 1) * CHANNELS * SLOT_SIZE / 8) as usize;
+    const USB_AUDIO_BUF_SIZE: usize = USB_AUDIO_FRAME_SIZE;
     const BUFFER_SIZE: usize = USB_AUDIO_FRAME_SIZE * 4;
     //const SAI_DMA_SIZE: usize = 64 as usize;
     const I2S_DMA_SIZE: usize = 64 as usize;
 
     #[init(local = [
+        heap: [u8; 1024] = [0; 1024],
         mute_buffer: [u16; I2S_DMA_SIZE] = [0; I2S_DMA_SIZE],
         audio_data_buffer: bbqueue::BBBuffer<BUFFER_SIZE> = bbqueue::BBBuffer::new(),
         usb_bus: Option<UsbBusAllocator<UsbBusType>> = None,
@@ -110,7 +130,10 @@ mod app {
     fn init(cx: init::Context) -> (Shared, Local, init::Monotonics) {
         defmt::info!("INIT :: Configuring Clocks");
 
-        let rcc: hal::rcc::Rcc = cx.device.RCC.constrain();
+        //let rcc: hal::rcc::Rcc = cx.device.RCC.constrain();
+        let rcc_peripheral: hal::pac::RCC = cx.device.RCC;
+        rcc_peripheral.cfgr.modify(|_,w| w.mco2().plli2s().mco2pre().div2());
+        let rcc: hal::rcc::Rcc = rcc_peripheral.constrain();
         let clocks = rcc.cfgr
             .use_hse(8.MHz())
             .sysclk(168.MHz())
@@ -118,6 +141,9 @@ mod app {
             .pclk1(42.MHz())
             .pclk2(84.MHz())
             .i2s_apb1_clk(49152.kHz())
+            .i2s_apb2_clk(49152.kHz())
+            //.i2s_apb1_clk(49152.kHz())
+            //.i2s_apb2_clk(86000.kHz())
             .require_pll48clk()
             .freeze();
 
@@ -130,7 +156,11 @@ mod app {
         defmt::info!("INIT ::   USB (pll48clk): {}", clocks.pll48clk().map(|h| h.raw()));
         defmt::info!("INIT ::   I2S           : {}", clocks.i2s_apb1_clk().map(|h| h.raw()));
 
+        defmt::info!("INIT :: Configuring monotonic timer");
         let mono = cx.device.TIM5.monotonic_us(&clocks);
+
+        defmt::info!("INIT :: Configuring global allocator");
+        unsafe { ALLOCATOR.init(cx.local.heap.as_ptr() as usize, 1024) }
 
         defmt::info!("INIT :: Allocating audio data buffer");
         let (audio_data_producer, audio_data_consumer) = cx.local.audio_data_buffer.try_split().unwrap();
@@ -139,26 +169,42 @@ mod app {
         let gpiob: gpiob::Parts = cx.device.GPIOB.split();
         let gpioc: gpioc::Parts = cx.device.GPIOC.split();
 
+        gpioc.pc9.into_alternate::<0>();
 
         defmt::info!("INIT :: Configuring I2S");
         let i2s_pins: I2sPins = (
-            gpioa.pa15.into_alternate(),
-            gpioa.pa5.into_alternate(),
-            gpioc.pc4.into_alternate(),
-            gpioa.pa7.into_alternate(),
+            gpioa.pa4.into_alternate(), // WS
+            gpioa.pa5.into_alternate(), // CK
+            NoPin,                      // MCLK (actually on RCC MCO2 = PC9<0>)
+            gpioa.pa7.into_alternate(), // SD
         );
 
         let hal_i2s = cx.device.SPI1.i2s(i2s_pins, &clocks);
-        let i2s_transmitter: I2sTx = stm32_i2s_v12x::I2s::new(hal_i2s)
-            .configure_master_transmit(
-                MasterConfig::with_sample_rate(
-                clocks.i2s_apb1_clk().unwrap().raw(),
-                96000,
-                Data24Frame32,
-                FrameFormat::MsbJustified,
-                Polarity::IdleHigh,
-                stm32_i2s_v12x::MasterClock::Enable,
-            ));
+        let i2s_config = MasterConfig::with_division(
+            // I2SCLK = 49_142_857 Hz (from i2s apb2 clock)
+            // Target f_s = 96_000
+            // Frame width = 32 (24-bit resolution in 32-bit frames)
+            // per RM0090, with master clock output disabled:
+            //   f_s = I2SCLK / [(32 * 2) * ((2 * I2SDIV) + ODD)]
+            //   96000 = 49142857 / (128 * I2SDIV)
+            //   12288000 = 49142857 / I2SDIV
+            //   I2SDIV = 49142857 / 12288000
+            //          = 3.9998...
+            //          ~= 4
+            //
+            //   f_s = 49142857 / (128 * 4)
+            //       = 95982.14257812 Hz
+            //
+            //   f_s Error = -0.018601%
+            8,
+            Data24Frame32,
+            FrameFormat::PhilipsI2s,
+            Polarity::IdleHigh,
+            stm32_i2s_v12x::MasterClock::Disable
+        );
+        let mut i2s_transmitter: I2sTx = stm32_i2s_v12x::I2s::new(hal_i2s)
+            .configure_master_transmit(i2s_config);
+        i2s_transmitter.set_dma_enabled(true);
 
         let mute_buffer: &'static [u16] = cx.local.mute_buffer;
         let mut i2s_dma_transfer = Transfer::init_memory_to_peripheral(
@@ -269,9 +315,10 @@ mod app {
                     let words: &'static [u16] = cast_slice(bytes);
                     unsafe { transfer.next_transfer_with(|_, _| (words, ())).unwrap(); }
 
-                    increment_i2s_data_rate::spawn(words.len() as u32 * 4).unwrap();
+                    increment_i2s_data_rate::spawn(bytes.len() as u32).unwrap();
                 },
                 Err(_) => {
+                    //increment_i2s_data_rate::spawn(I2S_DMA_SIZE as u32 * 2).unwrap();
                     unsafe { transfer.next_transfer_with(|buf, _| (buf, ())).unwrap(); }
                 }
             }
@@ -279,30 +326,57 @@ mod app {
         }
     }
 
-    #[task(binds = OTG_HS, local = [audio_data_producer, usb_dev, usb_audio], shared = [feedback_clock_counter])]
+    #[task(binds = OTG_HS, local = [
+        audio_data_producer,
+        usb_dev,
+        usb_audio,
+        usb_audio_buf: Aligned<A4, [u8; USB_AUDIO_FRAME_SIZE]> = Aligned([0; USB_AUDIO_FRAME_SIZE])
+    ], shared = [feedback_clock_counter])]
     fn usb_handler(cx: usb_handler::Context) {
         let producer: &mut bbqueue::Producer<'static, BUFFER_SIZE> = cx.local.audio_data_producer;
         let usb_dev: &mut UsbDevice<UsbBusType> = cx.local.usb_dev;
         let usb_audio: &mut SimpleStereoOutput<UsbBusType> = cx.local.usb_audio;
+        let usb_audio_buf = &mut **cx.local.usb_audio_buf;
         let mut feedback_clock_counter = cx.shared.feedback_clock_counter;
 
         while usb_dev.poll(&mut [usb_audio]) {
             if usb_audio.audio_feedback_needed {
                 match usb_audio.write_raw_feedback(feedback_clock_counter.lock(|i| *i)) {
-                    Ok(_) => defmt::debug!("Feedback OK"),
-                    Err(_) => defmt::info!("Feedback ERR"),
+                    Ok(_) => defmt::debug!("USB :: Feedback OK"),
+                    Err(_) => defmt::warn!("USB :: Feedback ERR"),
                 }
             }
 
             if usb_audio.audio_data_available {
-                producer.grant_exact(USB_AUDIO_FRAME_SIZE).and_then(|mut grant| {
-                    let bytes_received = usb_audio.read_audio_data(&mut grant).unwrap();
-                    defmt::debug!("USB :: received {} bytes of audio data", bytes_received);
-                    defmt::debug!("USB :: first sample {:x} {:x}", grant[0..4], grant[4..8]);
-                    //increment_sai_data_rate::spawn(bytes_received as u32).unwrap();
+                let bytes_received = usb_audio.read_audio_data(usb_audio_buf).unwrap();
+                defmt::debug!("USB :: received {} bytes of audio data", bytes_received);
+
+                let samples = cast_slice::<u8, i32>(&usb_audio_buf[0..bytes_received]).iter()
+                    .map(|sample| Sample::from_bits(*sample));
+
+                let volume_db = usb_audio.volume;
+                let samples_volume = match volume_db {
+                    0 => samples.map(|sample| sample),
+                    db => {
+                        let volume_amp = Sample::from_bits(decibels::DB[((db >> 8) + 127) as usize]);
+                        samples.map(|sample| sample * volume_amp)
+                    }
+                };
+
+                match producer.grant_exact(bytes_received).and_then(|mut grant| {
+                    for (grant_bytes, sample) in grant.chunks_exact_mut(4).zip(samples_volume) {
+                        let sample_bytes = sample.to_le_bytes();
+                        grant_bytes[0] = sample_bytes[2];
+                        grant_bytes[1] = sample_bytes[3];
+                        grant_bytes[2] = 0;
+                        grant_bytes[3] = sample_bytes[1];
+                    }
                     grant.commit(bytes_received);
                     Ok(())
-                }).unwrap();
+                }) {
+                    Ok(_) => defmt::debug!("USB :: produced"),
+                    Err(_) => defmt::warn!("USB :: queue full"),
+                }
             }
         }
     }
