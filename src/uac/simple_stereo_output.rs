@@ -1,3 +1,4 @@
+use bytemuck::cast_slice;
 use usb_device::{
     class_prelude::*,
     endpoint::{Endpoint, Out, In}
@@ -180,13 +181,13 @@ where
     }
 
     fn enable_stream(&mut self) {
-        defmt::info!("Enabling audio stream");
+        defmt::info!("usb audio :: Enabling audio stream");
         self.enable_disable.replace(StreamingState::Enabled);
         self.audio_feedback_needed = true;
     }
 
     fn disable_stream(&mut self) {
-        //defmt::info!("Disabling audio stream");
+        defmt::info!("usb audio :: Disabling audio stream");
         self.enable_disable.replace(StreamingState::Disabled);
         self.audio_feedback_needed = false;
     }
@@ -208,7 +209,7 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
 
         defmt::info!("usb audio :: get configuration descriptors");
 
-        defmt::info!("usb audio :: iad");
+        defmt::debug!("usb audio :: iad");
         // Interface Association Descriptor
         writer.iad(
             self.if_audio_control,
@@ -218,7 +219,7 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
             audio_function_protocol::AF_VERSION_02_00
         )?;
         // Standard AC Interface Descriptor
-        defmt::info!("usb audio :: interface");
+        defmt::debug!("usb audio :: interface");
         writer.interface(
             self.if_audio_control,
             audio_interface_class::AUDIO,
@@ -226,7 +227,7 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
             audio_interface_protocol::IP_VERSION_02_00
         )?;
         // Class-Specific AC Interface Descriptor
-        defmt::info!("usb audio :: cs interface");
+        defmt::debug!("usb audio :: cs interface");
         let mut buf: [u8; 64] = [0; 64];
         let mut ac_interface_descriptor_writer = AudioControlInterfaceDescriptorWriter::new(
             &mut buf,
@@ -263,20 +264,20 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
             0x00, // No output terminal controls
             None,
         )?;
-        defmt::info!("usb audio :: cs interface write_into");
+        defmt::debug!("usb audio :: cs interface write_into");
         ac_interface_descriptor_writer.write_into(writer)?;
-        defmt::info!("usb audio :: streaming interface");
+        defmt::debug!("usb audio :: streaming interface");
         writer.interface(
             self.if_audio_stream,
             audio_interface_class::AUDIO,
             audio_interface_subclass::AUDIOSTREAMING,
             audio_interface_protocol::IP_VERSION_02_00
         )?;
-        defmt::info!("usb audio :: streaming interface alt");
+        defmt::debug!("usb audio :: streaming interface alt");
         writer.interface_alt(self.if_audio_stream, 1, AUDIO, AUDIOSTREAMING, IP_VERSION_02_00, None)?;
         let bm_formats: u32 = PCM;
         let channels = ChannelConfig::new(None).front_left().front_right().channels();
-        defmt::info!("usb audio :: streaming interface cs");
+        defmt::debug!("usb audio :: streaming interface cs");
         writer.write(CS_INTERFACE, &[
             AS_GENERAL,
             self.input_terminal.into(),
@@ -294,14 +295,14 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
             0x00, // Channel Names
         ])?;
         // 24-bit audio samples in 4-byte subslots
-        defmt::info!("usb audio :: streaming interface format");
+        defmt::debug!("usb audio :: streaming interface format");
         writer.write(CS_INTERFACE, &[
             FORMAT_TYPE,
             FORMAT_TYPE_I,
             4,
             24,
         ]).unwrap();
-        defmt::info!("usb audio :: endpoint audio data");
+        defmt::debug!("usb audio :: endpoint audio data");
         writer.endpoint(&self.ep_audio_data)?;
         writer.write(CS_ENDPOINT, &[
             EP_GENERAL,
@@ -310,7 +311,7 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
             0x00, // lock delay units is ignored
             0x00, 0x00 // lock delay is also ignored
         ])?;
-        defmt::info!("usb audio :: endpoint feedback");
+        defmt::debug!("usb audio :: endpoint feedback");
         writer.endpoint(&self.ep_feedback)?;
 
         defmt::info!("usb audio :: get configuration descriptors DONE");
@@ -369,7 +370,7 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
         let otg_device = unsafe { &*pac::OTG_HS_DEVICE::ptr() };
         let otg_global = unsafe { &*pac::OTG_HS_GLOBAL::ptr() };
         if otg_global.gintsts.read().iisoixfr().bit_is_set() {
-            defmt::info!("IISOIXFR: {:b}", otg_device.diepint1.read().bits());
+            defmt::warn!("IISOIXFR: {:b}", otg_device.diepint1.read().bits());
             otg_global.gintsts.write(|w| w.iisoixfr().set_bit());
 
             if otg_device.diepint1.read().nak().bit_is_set() {
@@ -401,7 +402,7 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
 
     fn control_out(&mut self, xfer: ControlOut<B>) {
         let request = xfer.request();
-        defmt::info!("usb :: {:?}", defmt::Debug2Format(request));
+        defmt::debug!("usb :: {:?}", defmt::Debug2Format(request));
 
         match request.request_type {
             control::RequestType::Standard => {
@@ -416,7 +417,7 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
                             defmt::info!("SET_INTERFACE {}", self.alt_setting);
                         }
                     },
-                    _ => { defmt::debug!("Unknown standard request {:?}", defmt::Debug2Format(request)); },
+                    _ => { defmt::warn!("Unknown standard request {:?}", defmt::Debug2Format(request)); },
                 }
             },
             control::RequestType::Class => {
@@ -428,19 +429,19 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
                     }
                 };
 
-                defmt::info!("usb audio :: control out cs :: {:?}", cs_request);
+                defmt::debug!("usb audio :: control out cs :: {:?}", cs_request);
 
                 match cs_request.target {
                     Target::Interface(interface_number, entity_id) => {
                         if interface_number == self.if_audio_control.into() {
-                            defmt::info!("usb audio :: control out cs :: audio control interface");
+                            defmt::debug!("usb audio :: control out cs :: audio control interface");
                             match entity_id {
                                 None => {
                                     // Control request directed at the interface itself
                                     return xfer.reject().unwrap();
                                 },
                                 Some(entity_id) => {
-                                    defmt::info!("usb audio :: control out cs :: audio control entity {:?}", entity_id);
+                                    defmt::debug!("usb audio :: control out cs :: audio control entity {:?}", entity_id);
                                     if entity_id == self.feature_unit.into() {
                                         if cs_request.control_selector == FU_MUTE_CONTROL {
                                             defmt::info!("usb audio :: Set Mute = {:?}", xfer.data());
@@ -449,7 +450,7 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
                                         } else if cs_request.control_selector == FU_VOLUME_CONTROL {
                                             defmt::info!("usb audio :: Set Volume = {:?}", xfer.data());
                                             let data = xfer.data();
-                                            self.volume = data[0] as u16 + (data[1] as u16) << 8;
+                                            self.volume = i16::from_le_bytes([data[0], data[1]]);
                                             return xfer.accept().unwrap();
                                         }
                                     }
@@ -458,7 +459,7 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
                         }
                     },
                     Target::Endpoint(endpoint_number) => {
-                        defmt::info!("usb audio :: control out cs :: endpoint number {:?}", endpoint_number);
+                        defmt::debug!("usb audio :: control out cs :: endpoint number {:?}", endpoint_number);
                         return xfer.accept().unwrap();
                     }
                 }
@@ -469,7 +470,7 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
 
     fn control_in(&mut self, xfer: ControlIn<B>) {
         let request = xfer.request();
-        defmt::info!("usb :: {:?}", defmt::Debug2Format(request));
+        defmt::debug!("usb :: {:?}", defmt::Debug2Format(request));
 
         match request.request_type {
             control::RequestType::Vendor |
@@ -495,19 +496,19 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
                     }
                 };
 
-                defmt::info!("usb audio :: control in cs :: {:?}", cs_request);
+                defmt::debug!("usb audio :: control in cs :: {:?}", cs_request);
 
                 match cs_request.target {
                     super::request::Target::Interface(interface_number, entity_id) => {
                         if interface_number == self.if_audio_control.into() {
-                            defmt::info!("usb audio :: control in cs :: audio control interface");
+                            defmt::debug!("usb audio :: control in cs :: audio control interface");
                             match entity_id {
                                 None => {
                                     // Control request directed at the interface itself
                                     return;
                                 },
                                 Some(entity_id) => {
-                                    defmt::info!("usb audio :: control in cs :: audio control entity {:?}", entity_id);
+                                    defmt::debug!("usb audio :: control in cs :: audio control entity {:?}", entity_id);
                                     if entity_id == self.feature_unit.into() {
                                         if cs_request.control_selector == descriptors::feature_unit_control_selector::FU_MUTE_CONTROL {
                                             if cs_request.request_code == RequestCode::Cur {
