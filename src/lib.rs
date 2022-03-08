@@ -7,6 +7,7 @@ pub use stm32f4xx_hal as hal; // memory layout
 
 use panic_probe as _;
 
+pub mod decibels;
 pub mod uac;
 pub mod timer;
 
