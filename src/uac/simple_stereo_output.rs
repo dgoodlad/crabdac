@@ -54,8 +54,8 @@ pub struct SimpleStereoOutput<'a, B: UsbBus> {
     feature_unit: EntityId,
     output_terminal: EntityId,
 
-    mute: bool,
-    volume: u16,
+    pub mute: bool,
+    pub volume: i16,
 
     alt_setting: u8,
     pub audio_data_available: bool,
