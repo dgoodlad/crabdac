@@ -522,9 +522,9 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
                                                 defmt::info!("usb audio :: GET VOLUME Range");
                                                 return xfer.accept_with(&[
                                                     0x01, 0x00, // 1 sub-range
-                                                    0x00, 0x00, // -127dB
-                                                    0xff, 0x7f, // +127dB
-                                                    0x00, 0x01, // 1dB resolution (1/256 * 2^8 = 1)
+                                                    0x00, 0x82, // -127 dB min
+                                                    0x00, 0x00, // +0   dB max
+                                                    0x00, 0x01, // 1    dB resolution
                                                 ]).unwrap();
                                             }
                                         }
