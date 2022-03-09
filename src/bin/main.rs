@@ -9,8 +9,6 @@ static ALLOCATOR: CortexMHeap = CortexMHeap::empty();
 
 #[rtic::app(device = stm32f4xx_hal::pac, dispatchers = [SPI2])]
 mod app {
-    use core::ops::Neg;
-
     use crabdac::{
         decibels,
         hal,
@@ -51,7 +49,7 @@ mod app {
     use aligned::{Aligned, A4};
 
     use bbqueue::{self, GrantR};
-    use bytemuck::{cast_slice, cast, bytes_of_mut, Pod, cast_slice_mut};
+    use bytemuck::cast_slice;
 
     use usb_device::prelude::*;
     use usb_device::bus::UsbBusAllocator;
@@ -86,11 +84,9 @@ mod app {
     struct Shared {
         #[lock_free]
         i2s_dma_transfer: I2sDmaTransfer,
-        //sai_dma_transfer: SaiDmaTransfer,
 
         #[lock_free]
         i2s_data_rate: u32,
-        //sai_data_rate: u32,
 
         feedback_clock_counter: u32,
     }
@@ -115,9 +111,7 @@ mod app {
     const SLOT_SIZE: u32 = 32;
     const USB_FRAME_RATE: u32 = 1000;
     const USB_AUDIO_FRAME_SIZE: usize = (((SAMPLE_RATE / USB_FRAME_RATE) + 1) * CHANNELS * SLOT_SIZE / 8) as usize;
-    const USB_AUDIO_BUF_SIZE: usize = USB_AUDIO_FRAME_SIZE;
     const BUFFER_SIZE: usize = USB_AUDIO_FRAME_SIZE * 4;
-    //const SAI_DMA_SIZE: usize = 64 as usize;
     const I2S_DMA_SIZE: usize = 64 as usize;
 
     #[init(local = [
@@ -169,6 +163,7 @@ mod app {
         let gpiob: gpiob::Parts = cx.device.GPIOB.split();
         let gpioc: gpioc::Parts = cx.device.GPIOC.split();
 
+        defmt::info!("INIT :: Configuring MCO2 pin");
         gpioc.pc9.into_alternate::<0>();
 
         defmt::info!("INIT :: Configuring I2S");
@@ -183,19 +178,18 @@ mod app {
         let i2s_config = MasterConfig::with_division(
             // I2SCLK = 49_142_857 Hz (from i2s apb2 clock)
             // Target f_s = 96_000
-            // Frame width = 32 (24-bit resolution in 32-bit frames)
-            // per RM0090, with master clock output disabled:
-            //   f_s = I2SCLK / [(32 * 2) * ((2 * I2SDIV) + ODD)]
-            //   96000 = 49142857 / (128 * I2SDIV)
-            //   12288000 = 49142857 / I2SDIV
-            //   I2SDIV = 49142857 / 12288000
-            //          = 3.9998...
-            //          ~= 4
+            // Target f_ck = 96_000 * 32 * 2
+            //             = 6_144_000
+            // I2SDIV = I2SCLK / f_ck
+            //        = 49_142_857 / 6_144_000
+            //        = 7.999...
+            //        ~= 8
             //
-            //   f_s = 49142857 / (128 * 4)
-            //       = 95982.14257812 Hz
+            // f_s = I2SCLK / I2SDIV / 32 / 2
+            //     = 49_142_857 / 512
+            //     = 95982.14257812 Hz
             //
-            //   f_s Error = -0.018601%
+            // f_s Error = -0.018601%
             8,
             Data24Frame32,
             FrameFormat::PhilipsI2s,
@@ -283,16 +277,15 @@ mod app {
     }
 
     #[task(binds = DMA2_STREAM5,
+           priority = 3,
            local = [audio_data_consumer, audio_data_read_grant],
            shared = [i2s_dma_transfer])]
     fn i2s_dma_handler(cx: i2s_dma_handler::Context) {
         let consumer: &mut bbqueue::Consumer<'static, BUFFER_SIZE> = cx.local.audio_data_consumer;
         let old_grant: &mut Option<bbqueue::GrantR<'static, BUFFER_SIZE>> = cx.local.audio_data_read_grant;
-        let transfer = cx.shared.i2s_dma_transfer;
+        let transfer: &mut I2sDmaTransfer = cx.shared.i2s_dma_transfer;
 
         if Stream5::<pac::DMA2>::get_transfer_complete_flag() {
-            transfer.clear_transfer_complete_interrupt();
-
             match old_grant.take() {
                 Some(g) => {
                     defmt::debug!("I2S :: Dropping a grant of {} bytes", g.len());
@@ -313,7 +306,7 @@ mod app {
                     };
                     old_grant.replace(grant);
                     let words: &'static [u16] = cast_slice(bytes);
-                    unsafe { transfer.next_transfer_with(|_, _| (words, ())).unwrap(); }
+                    transfer.next_transfer(words).unwrap();
 
                     increment_i2s_data_rate::spawn(bytes.len() as u32).unwrap();
                 },
@@ -326,12 +319,16 @@ mod app {
         }
     }
 
-    #[task(binds = OTG_HS, local = [
-        audio_data_producer,
-        usb_dev,
-        usb_audio,
-        usb_audio_buf: Aligned<A4, [u8; USB_AUDIO_FRAME_SIZE]> = Aligned([0; USB_AUDIO_FRAME_SIZE])
-    ], shared = [feedback_clock_counter])]
+    #[task(binds = OTG_HS,
+           priority = 2,
+           local = [
+               audio_data_producer,
+               usb_dev,
+               usb_audio,
+               usb_audio_buf: Aligned<A4, [u8; USB_AUDIO_FRAME_SIZE]> = Aligned([0; USB_AUDIO_FRAME_SIZE])
+           ],
+           shared = [feedback_clock_counter]
+    )]
     fn usb_handler(cx: usb_handler::Context) {
         let producer: &mut bbqueue::Producer<'static, BUFFER_SIZE> = cx.local.audio_data_producer;
         let usb_dev: &mut UsbDevice<UsbBusType> = cx.local.usb_dev;
@@ -351,31 +348,29 @@ mod app {
                 let bytes_received = usb_audio.read_audio_data(usb_audio_buf).unwrap();
                 defmt::debug!("USB :: received {} bytes of audio data", bytes_received);
 
-                let samples = cast_slice::<u8, i32>(&usb_audio_buf[0..bytes_received]).iter()
-                    .map(|sample| Sample::from_bits(*sample));
-
                 let volume_db = usb_audio.volume;
-                let samples_volume = match volume_db {
-                    0 => samples.map(|sample| sample),
-                    db => {
-                        let volume_amp = Sample::from_bits(decibels::DB[((db >> 8) + 127) as usize]);
-                        samples.map(|sample| sample * volume_amp)
-                    }
+                let volume_amp = match volume_db {
+                    0 => Sample::from_num(1 as i32),
+                    _ => Sample::from_bits(decibels::DB[((volume_db >> 8) + 127) as usize]),
                 };
 
-                match producer.grant_exact(bytes_received).and_then(|mut grant| {
-                    for (grant_bytes, sample) in grant.chunks_exact_mut(4).zip(samples_volume) {
-                        let sample_bytes = sample.to_le_bytes();
-                        grant_bytes[0] = sample_bytes[2];
-                        grant_bytes[1] = sample_bytes[3];
-                        grant_bytes[2] = 0;
-                        grant_bytes[3] = sample_bytes[1];
-                    }
-                    grant.commit(bytes_received);
-                    Ok(())
-                }) {
-                    Ok(_) => defmt::debug!("USB :: produced"),
-                    Err(_) => defmt::warn!("USB :: queue full"),
+                let samples = cast_slice::<u8, i32>(&usb_audio_buf[0..bytes_received]).iter()
+                    .cloned()
+                    .map(|sample| Sample::from_bits(sample))
+                    .map(|sample| sample * volume_amp)
+                    .map(|sample| sample.to_le_bytes());
+
+                match producer.grant_exact(bytes_received) {
+                    Ok(mut grant) => {
+                        for (sample_bytes, grant_bytes) in samples.zip(grant.chunks_exact_mut(4)) {
+                            grant_bytes[0] = sample_bytes[2];
+                            grant_bytes[1] = sample_bytes[3];
+                            grant_bytes[2] = sample_bytes[0];
+                            grant_bytes[3] = sample_bytes[1];
+                        }
+                        grant.commit(bytes_received);
+                    },
+                    Err(e) => defmt::warn!("USB :: grant failed {:?}", defmt::Debug2Format(&e)),
                 }
             }
         }
