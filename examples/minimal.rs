@@ -27,12 +27,12 @@ mod app {
 
         let rcc = cx.device.RCC.constrain();
         let clocks = rcc.cfgr
-            .use_hse(8.MHz())
-            .sysclk(180.MHz())
-            .hclk(180.MHz())
-            .pclk1(45.MHz())
-            .pclk2(90.MHz())
-            .i2s_apb1_clk(98400.kHz())
+            .use_hse(25.MHz())
+            .sysclk(96.MHz())
+            .hclk(96.MHz())
+            .pclk1(48.MHz())
+            .pclk2(96.MHz())
+            //.i2s_apb1_clk(98400.kHz())
             .require_pll48clk()
             .freeze();
 
