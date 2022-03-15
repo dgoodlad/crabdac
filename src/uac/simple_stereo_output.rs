@@ -162,7 +162,7 @@ where
 
     pub fn write_raw_feedback(&mut self, value: u32) -> Result<usize, UsbError> {
         defmt::debug!("usb audio feedback :: frame {:x}", unsafe {
-            let otg_device = &*pac::OTG_HS_DEVICE::ptr();
+            let otg_device = &*pac::OTG_FS_DEVICE::ptr();
             otg_device.dsts.read().fnsof().bits()
         });
 
@@ -325,8 +325,8 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
     }
 
     fn reset(&mut self) {
-        let otg_device = unsafe { &*pac::OTG_HS_DEVICE::ptr() };
-        let otg_global = unsafe { &*pac::OTG_HS_GLOBAL::ptr() };
+        let otg_device = unsafe { &*pac::OTG_FS_DEVICE::ptr() };
+        let otg_global = unsafe { &*pac::OTG_FS_GLOBAL::ptr() };
 
         // Unmask a couple extra interrupts:
         // * IISOIXFRM - incomplete isochronous IN transfers
@@ -367,13 +367,13 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
         //           XFRC              Fill EP1 TX FIFO (write to endpoint)
         // ...
         //
-        let otg_device = unsafe { &*pac::OTG_HS_DEVICE::ptr() };
-        let otg_global = unsafe { &*pac::OTG_HS_GLOBAL::ptr() };
+        let otg_device = unsafe { &*pac::OTG_FS_DEVICE::ptr() };
+        let otg_global = unsafe { &*pac::OTG_FS_GLOBAL::ptr() };
         if otg_global.gintsts.read().iisoixfr().bit_is_set() {
             defmt::warn!("IISOIXFR: {:b}", otg_device.diepint1.read().bits());
             otg_global.gintsts.write(|w| w.iisoixfr().set_bit());
 
-            if otg_device.diepint1.read().nak().bit_is_set() {
+            //if otg_device.diepint1.read().nak().bit_is_set() {
                 // Set the endpoint to NAK mode
                 otg_device.diepctl1.modify(|_,w| w.snak().set_bit());
                 while otg_device.diepint1.read().inepne().bit_is_clear() {}
@@ -396,7 +396,7 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
 
                 // We're ready to retry sending the feedback packet again
                 self.audio_feedback_needed = true;
-            }
+            //}
         }
     }
 

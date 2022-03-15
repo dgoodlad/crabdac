@@ -34,16 +34,58 @@ impl From<crate::W<OR_SPEC>> for W {
         W(writer)
     }
 }
+#[doc = "Timer Input 4 remap\n\nValue on reset: 0"]
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[repr(u8)]
+pub enum ITR1_RMP_A {
+    #[doc = "0: TIM8 trigger output is connected to TIM2_ITR1 input"]
+    TIM8_TRGOUT = 0,
+    #[doc = "2: OTG FS SOF is connected to the TIM2_ITR1 input"]
+    OTG_FS_SOF = 2,
+    #[doc = "3: OTG HS SOF is connected to the TIM2_ITR1 input"]
+    OTG_HS_SOF = 3,
+}
+impl From<ITR1_RMP_A> for u8 {
+    #[inline(always)]
+    fn from(variant: ITR1_RMP_A) -> Self {
+        variant as _
+    }
+}
 #[doc = "Field `ITR1_RMP` reader - Timer Input 4 remap"]
-pub struct ITR1_RMP_R(crate::FieldReader<u8, u8>);
+pub struct ITR1_RMP_R(crate::FieldReader<u8, ITR1_RMP_A>);
 impl ITR1_RMP_R {
     #[inline(always)]
     pub(crate) fn new(bits: u8) -> Self {
         ITR1_RMP_R(crate::FieldReader::new(bits))
     }
+    #[doc = r"Get enumerated values variant"]
+    #[inline(always)]
+    pub fn variant(&self) -> Option<ITR1_RMP_A> {
+        match self.bits {
+            0 => Some(ITR1_RMP_A::TIM8_TRGOUT),
+            2 => Some(ITR1_RMP_A::OTG_FS_SOF),
+            3 => Some(ITR1_RMP_A::OTG_HS_SOF),
+            _ => None,
+        }
+    }
+    #[doc = "Checks if the value of the field is `TIM8_TRGOUT`"]
+    #[inline(always)]
+    pub fn is_tim8_trgout(&self) -> bool {
+        **self == ITR1_RMP_A::TIM8_TRGOUT
+    }
+    #[doc = "Checks if the value of the field is `OTG_FS_SOF`"]
+    #[inline(always)]
+    pub fn is_otg_fs_sof(&self) -> bool {
+        **self == ITR1_RMP_A::OTG_FS_SOF
+    }
+    #[doc = "Checks if the value of the field is `OTG_HS_SOF`"]
+    #[inline(always)]
+    pub fn is_otg_hs_sof(&self) -> bool {
+        **self == ITR1_RMP_A::OTG_HS_SOF
+    }
 }
 impl core::ops::Deref for ITR1_RMP_R {
-    type Target = crate::FieldReader<u8, u8>;
+    type Target = crate::FieldReader<u8, ITR1_RMP_A>;
     #[inline(always)]
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -54,6 +96,26 @@ pub struct ITR1_RMP_W<'a> {
     w: &'a mut W,
 }
 impl<'a> ITR1_RMP_W<'a> {
+    #[doc = r"Writes `variant` to the field"]
+    #[inline(always)]
+    pub fn variant(self, variant: ITR1_RMP_A) -> &'a mut W {
+        unsafe { self.bits(variant.into()) }
+    }
+    #[doc = "TIM8 trigger output is connected to TIM2_ITR1 input"]
+    #[inline(always)]
+    pub fn tim8_trgout(self) -> &'a mut W {
+        self.variant(ITR1_RMP_A::TIM8_TRGOUT)
+    }
+    #[doc = "OTG FS SOF is connected to the TIM2_ITR1 input"]
+    #[inline(always)]
+    pub fn otg_fs_sof(self) -> &'a mut W {
+        self.variant(ITR1_RMP_A::OTG_FS_SOF)
+    }
+    #[doc = "OTG HS SOF is connected to the TIM2_ITR1 input"]
+    #[inline(always)]
+    pub fn otg_hs_sof(self) -> &'a mut W {
+        self.variant(ITR1_RMP_A::OTG_HS_SOF)
+    }
     #[doc = r"Writes raw bits to the field"]
     #[inline(always)]
     pub unsafe fn bits(self, value: u8) -> &'a mut W {

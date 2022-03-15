@@ -18,7 +18,7 @@ impl UsbFrameTimer for TIM2 {
     // Configure the timer to use the OTG_FS_SOF signal as TRC, which is
     // usable as the trigger signal for input capture channels
     fn connect_trc(&self) {
-        self.or.write(|w| w.itr1_rmp().otg_hs_sof());
+        self.or.write(|w| w.itr1_rmp().otg_fs_sof());
 
         // Set ITR1 as the clock synchronisation trigger, TRC
         self.smcr.modify(|_r, w| w

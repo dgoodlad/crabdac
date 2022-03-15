@@ -37,7 +37,7 @@ mod app {
             Alternate, NoPin,
         },
 
-        otg_hs::{
+        otg_fs::{
             USB,
             UsbBus,
             UsbBusType,
@@ -119,25 +119,22 @@ mod app {
         mute_buffer: [u16; I2S_DMA_SIZE] = [0; I2S_DMA_SIZE],
         audio_data_buffer: bbqueue::BBBuffer<BUFFER_SIZE> = bbqueue::BBBuffer::new(),
         usb_bus: Option<UsbBusAllocator<UsbBusType>> = None,
-        usb_ep_memory: [u32; 1024] = [0; 1024],
+        usb_ep_memory: [u32; 320] = [0; 320],
     ])]
     fn init(cx: init::Context) -> (Shared, Local, init::Monotonics) {
         defmt::info!("INIT :: Configuring Clocks");
 
-        //let rcc: hal::rcc::Rcc = cx.device.RCC.constrain();
         let rcc_peripheral: hal::pac::RCC = cx.device.RCC;
         rcc_peripheral.cfgr.modify(|_,w| w.mco2().plli2s().mco2pre().div2());
         let rcc: hal::rcc::Rcc = rcc_peripheral.constrain();
         let clocks = rcc.cfgr
-            .use_hse(8.MHz())
-            .sysclk(168.MHz())
-            .hclk(168.MHz())
-            .pclk1(42.MHz())
-            .pclk2(84.MHz())
-            .i2s_apb1_clk(49152.kHz())
-            .i2s_apb2_clk(49152.kHz())
-            //.i2s_apb1_clk(49152.kHz())
-            //.i2s_apb2_clk(86000.kHz())
+            .use_hse(25.MHz())
+            .sysclk(96.MHz())
+            .hclk(96.MHz())
+            .pclk1(48.MHz())
+            .pclk2(96.MHz())
+            //.i2s_clk(49152.kHz())
+            .i2s_clk(98304.kHz())
             .require_pll48clk()
             .freeze();
 
@@ -148,7 +145,7 @@ mod app {
         defmt::info!("INIT ::   PCLK1         : {}", clocks.pclk1().raw());
         defmt::info!("INIT ::   PCLK2         : {}", clocks.pclk2().raw());
         defmt::info!("INIT ::   USB (pll48clk): {}", clocks.pll48clk().map(|h| h.raw()));
-        defmt::info!("INIT ::   I2S           : {}", clocks.i2s_apb1_clk().map(|h| h.raw()));
+        defmt::info!("INIT ::   I2S           : {}", clocks.i2s_clk().map(|h| h.raw()));
 
         defmt::info!("INIT :: Configuring monotonic timer");
         let mono = cx.device.TIM5.monotonic_us(&clocks);
@@ -215,11 +212,11 @@ mod app {
 
         defmt::info!("INIT :: Configuring USB");
         let usb = USB {
-            usb_global: cx.device.OTG_HS_GLOBAL,
-            usb_device: cx.device.OTG_HS_DEVICE,
-            usb_pwrclk: cx.device.OTG_HS_PWRCLK,
-            pin_dm: gpiob.pb14.into_alternate(),
-            pin_dp: gpiob.pb15.into_alternate(),
+            usb_global: cx.device.OTG_FS_GLOBAL,
+            usb_device: cx.device.OTG_FS_DEVICE,
+            usb_pwrclk: cx.device.OTG_FS_PWRCLK,
+            pin_dm: gpioa.pa11.into_alternate(),
+            pin_dp: gpioa.pa12.into_alternate(),
             hclk: clocks.hclk(),
         };
 
@@ -319,7 +316,7 @@ mod app {
         }
     }
 
-    #[task(binds = OTG_HS,
+    #[task(binds = OTG_FS,
            priority = 2,
            local = [
                audio_data_producer,
