@@ -7,7 +7,7 @@ use alloc_cortex_m::CortexMHeap;
 #[global_allocator]
 static ALLOCATOR: CortexMHeap = CortexMHeap::empty();
 
-#[rtic::app(device = stm32f4xx_hal::pac, dispatchers = [SPI2])]
+#[rtic::app(device = stm32f4xx_hal::pac, dispatchers = [TIM3, TIM4])]
 mod app {
     use crabdac::{
         decibels,
@@ -25,7 +25,7 @@ mod app {
             config::DmaConfig,
             traits::StreamISR,
             MemoryToPeripheral,
-            Stream5,
+            Stream4,
             StreamsTuple,
             Transfer,
         },
