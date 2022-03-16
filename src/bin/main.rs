@@ -84,9 +84,6 @@ mod app {
         #[lock_free]
         i2s_dma_transfer: I2sDmaTransfer,
 
-        #[lock_free]
-        i2s_data_rate: u32,
-
         feedback_clock_counter: u32,
     }
 
@@ -221,8 +218,6 @@ mod app {
             .self_powered(true)
             .build();
 
-        print_i2s_data_rate::spawn_after(1.secs()).unwrap();
-
         let audio_feedback_timer: UsbAudioFrequencyFeedback<pac::TIM2, PA5<Alternate<1>>> =
             UsbAudioFrequencyFeedback::new(cx.device.TIM2, CaptureChannel::Channel1, gpioa.pa5.into_alternate());
         audio_feedback_timer.start();
@@ -232,7 +227,6 @@ mod app {
         (
             Shared {
                 i2s_dma_transfer,
-                i2s_data_rate: 0,
                 feedback_clock_counter: (256 * SAMPLE_RATE * 4 / USB_FRAME_RATE) << 4, // number of mclk pulses (256 * F_s) in 4 usb frames
             },
             Local {
@@ -287,11 +281,8 @@ mod app {
                     old_grant.replace(grant);
                     let words: &'static [u16] = cast_slice(bytes);
                     transfer.next_transfer(words).unwrap();
-
-                    increment_i2s_data_rate::spawn(bytes.len() as u32).unwrap();
                 },
                 Err(_) => {
-                    //increment_i2s_data_rate::spawn(I2S_DMA_SIZE as u32 * 2).unwrap();
                     unsafe { transfer.next_transfer_with(|buf, _| (buf, ())).unwrap(); }
                 }
             }
@@ -356,21 +347,7 @@ mod app {
         }
     }
 
-    #[task(priority = 1, shared = [i2s_data_rate])]
-    fn print_i2s_data_rate(cx: print_i2s_data_rate::Context) {
-        print_i2s_data_rate::spawn_after(1.secs()).unwrap();
-
-        let i2s_data_rate = *cx.shared.i2s_data_rate;
-        defmt::info!("I2S Data Rate: {} bytes/second", i2s_data_rate);
-        *cx.shared.i2s_data_rate = 0;
-    }
-
-    #[task(priority = 1, shared = [i2s_data_rate])]
-    fn increment_i2s_data_rate(cx: increment_i2s_data_rate::Context, count: u32) {
-        *cx.shared.i2s_data_rate += count;
-    }
-
-    #[task(binds = TIM2, local = [audio_feedback_timer], shared = [feedback_clock_counter])]
+    #[task(binds = TIM2, priority = 1, local = [audio_feedback_timer], shared = [feedback_clock_counter])]
     fn tim2(mut cx: tim2::Context) {
         static mut COUNTER: ClockCounter = ClockCounter{ticks: 0, frames: 0, mck_to_fs_ratio: 8};
 
