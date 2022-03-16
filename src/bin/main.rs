@@ -54,30 +54,29 @@ mod app {
     use usb_device::prelude::*;
     use usb_device::bus::UsbBusAllocator;
 
-    use stm32_i2s_v12x::{self, TransmitMode, MasterConfig, format::{Data24Frame32, FrameFormat}, Polarity};
+    use stm32_i2s_v12x::{self, TransmitMode, MasterConfig, format::{Data24Frame32, FrameFormat}, Polarity, MasterClock};
 
-    //use dasp::signal;
     type Sample = fixed::FixedI32<fixed::types::extra::U31>;
 
     type I2sPins = (
         // WS
-        PA4<Alternate<5>>,
+        PB12<Alternate<5>>,
         // CK
-        PA5<Alternate<5>>,
+        PB13<Alternate<5>>,
         // MCLK
-        NoMasterClock,
+        PA3<Alternate<5>>,
         // SD
-        PA7<Alternate<5>>,
+        PB15<Alternate<5>>,
     );
 
-    type I2sTx = stm32_i2s_v12x::I2s<hal::i2s::I2s<pac::SPI1, I2sPins>, TransmitMode<Data24Frame32>>;
+    type I2sTx = stm32_i2s_v12x::I2s<hal::i2s::I2s<pac::SPI2, I2sPins>, TransmitMode<Data24Frame32>>;
 
     type I2sDmaTransfer = Transfer<
-        Stream5<pac::DMA2>,
+        Stream4<pac::DMA1>,
         I2sTx,
         MemoryToPeripheral,
         &'static [u16],
-        3
+        0
     >;
 
     #[shared]
@@ -100,7 +99,7 @@ mod app {
         usb_dev: UsbDevice<'static, UsbBusType>,
         usb_audio: SimpleStereoOutput<'static, UsbBusType>,
 
-        audio_feedback_timer: UsbAudioFrequencyFeedback<pac::TIM2, PB8<Alternate<1>>>,
+        audio_feedback_timer: UsbAudioFrequencyFeedback<pac::TIM2, PA5<Alternate<1>>>,
     }
 
     #[monotonic(binds = TIM5, default = true)]
@@ -125,7 +124,6 @@ mod app {
         defmt::info!("INIT :: Configuring Clocks");
 
         let rcc_peripheral: hal::pac::RCC = cx.device.RCC;
-        rcc_peripheral.cfgr.modify(|_,w| w.mco2().plli2s().mco2pre().div2());
         let rcc: hal::rcc::Rcc = rcc_peripheral.constrain();
         let clocks = rcc.cfgr
             .use_hse(25.MHz())
@@ -133,7 +131,6 @@ mod app {
             .hclk(96.MHz())
             .pclk1(48.MHz())
             .pclk2(96.MHz())
-            //.i2s_clk(49152.kHz())
             .i2s_clk(98304.kHz())
             .require_pll48clk()
             .freeze();
@@ -160,50 +157,36 @@ mod app {
         let gpiob: gpiob::Parts = cx.device.GPIOB.split();
         let gpioc: gpioc::Parts = cx.device.GPIOC.split();
 
-        defmt::info!("INIT :: Configuring MCO2 pin");
-        gpioc.pc9.into_alternate::<0>();
-
         defmt::info!("INIT :: Configuring I2S");
         let i2s_pins: I2sPins = (
-            gpioa.pa4.into_alternate(), // WS
-            gpioa.pa5.into_alternate(), // CK
-            NoPin,                      // MCLK (actually on RCC MCO2 = PC9<0>)
-            gpioa.pa7.into_alternate(), // SD
+            gpiob.pb12.into_alternate(), // WS
+            gpiob.pb13.into_alternate(), // CK
+            gpioa.pa3.into_alternate(), // MCLK
+            gpiob.pb15.into_alternate(), // SD
         );
 
-        let hal_i2s = cx.device.SPI1.i2s(i2s_pins, &clocks);
-        let i2s_config = MasterConfig::with_division(
-            // I2SCLK = 49_142_857 Hz (from i2s apb2 clock)
-            // Target f_s = 96_000
-            // Target f_ck = 96_000 * 32 * 2
-            //             = 6_144_000
-            // I2SDIV = I2SCLK / f_ck
-            //        = 49_142_857 / 6_144_000
-            //        = 7.999...
-            //        ~= 8
-            //
-            // f_s = I2SCLK / I2SDIV / 32 / 2
-            //     = 49_142_857 / 512
-            //     = 95982.14257812 Hz
-            //
-            // f_s Error = -0.018601%
-            8,
+        let hal_i2s = cx.device.SPI2.i2s(i2s_pins, &clocks);
+        let i2s_config = MasterConfig::with_sample_rate(
+            clocks.i2s_clk().unwrap().raw(),
+            96000,
             Data24Frame32,
             FrameFormat::PhilipsI2s,
             Polarity::IdleHigh,
-            stm32_i2s_v12x::MasterClock::Disable
+            MasterClock::Enable
         );
+        defmt::info!("i2s config: {:?}", defmt::Debug2Format(&i2s_config));
         let mut i2s_transmitter: I2sTx = stm32_i2s_v12x::I2s::new(hal_i2s)
             .configure_master_transmit(i2s_config);
         i2s_transmitter.set_dma_enabled(true);
 
         let mute_buffer: &'static [u16] = cx.local.mute_buffer;
         let mut i2s_dma_transfer = Transfer::init_memory_to_peripheral(
-            StreamsTuple::new(cx.device.DMA2).5,
+            StreamsTuple::new(cx.device.DMA1).4,
             i2s_transmitter,
             mute_buffer,
             None,
             DmaConfig::default()
+                .priority(hal::dma::config::Priority::High)
                 .double_buffer(false)
                 .memory_increment(true)
                 .transfer_complete_interrupt(true),
@@ -240,8 +223,8 @@ mod app {
 
         print_i2s_data_rate::spawn_after(1.secs()).unwrap();
 
-        let audio_feedback_timer: UsbAudioFrequencyFeedback<pac::TIM2, PB8<Alternate<1>>> =
-            UsbAudioFrequencyFeedback::new(cx.device.TIM2, CaptureChannel::Channel1, gpiob.pb8.into_alternate());
+        let audio_feedback_timer: UsbAudioFrequencyFeedback<pac::TIM2, PA5<Alternate<1>>> =
+            UsbAudioFrequencyFeedback::new(cx.device.TIM2, CaptureChannel::Channel1, gpioa.pa5.into_alternate());
         audio_feedback_timer.start();
 
         defmt::info!("INIT :: Finished");
@@ -273,7 +256,7 @@ mod app {
         }
     }
 
-    #[task(binds = DMA2_STREAM5,
+    #[task(binds = DMA1_STREAM4,
            priority = 3,
            local = [audio_data_consumer, audio_data_read_grant],
            shared = [i2s_dma_transfer])]
@@ -282,7 +265,7 @@ mod app {
         let old_grant: &mut Option<bbqueue::GrantR<'static, BUFFER_SIZE>> = cx.local.audio_data_read_grant;
         let transfer: &mut I2sDmaTransfer = cx.shared.i2s_dma_transfer;
 
-        if Stream5::<pac::DMA2>::get_transfer_complete_flag() {
+        if Stream4::<pac::DMA1>::get_transfer_complete_flag() {
             match old_grant.take() {
                 Some(g) => {
                     defmt::debug!("I2S :: Dropping a grant of {} bytes", g.len());
