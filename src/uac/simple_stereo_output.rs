@@ -423,6 +423,8 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
                             defmt::info!("SET_INTERFACE {}", self.alt_setting);
                         }
                     },
+                    control::Request::SET_ADDRESS => defmt::info!("USB :: Set address {:?}", request.value),
+                    control::Request::SET_CONFIGURATION => defmt::info!("USB :: Set configuration {:?}", request.value),
                     _ => { defmt::warn!("Unknown standard request {:?}", defmt::Debug2Format(request)); },
                 }
             },
