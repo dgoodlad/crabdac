@@ -1,3 +1,5 @@
+use core::ops::BitAnd;
+
 use bytemuck::cast_slice;
 use usb_device::{
     class_prelude::*,
@@ -370,10 +372,14 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
         let otg_device = unsafe { &*pac::OTG_FS_DEVICE::ptr() };
         let otg_global = unsafe { &*pac::OTG_FS_GLOBAL::ptr() };
         if otg_global.gintsts.read().iisoixfr().bit_is_set() {
-            defmt::warn!("IISOIXFR: {:b}", otg_device.diepint1.read().bits());
+            defmt::warn!("GINTSTS: {:b}", otg_global.gintsts.read().bits());
+            defmt::warn!("DIEPINT0: {:b}", otg_device.diepint0.read().bits());
+            defmt::warn!("DIEPINT1: {:b}", otg_device.diepint1.read().bits());
             otg_global.gintsts.write(|w| w.iisoixfr().set_bit());
 
+            // TODO OTG FS DIEPINTx is meant to have NAK at bit 13
             //if otg_device.diepint1.read().nak().bit_is_set() {
+            if otg_device.diepint1.read().bits().bitand(1 << 13) > 0 {
                 // Set the endpoint to NAK mode
                 otg_device.diepctl1.modify(|_,w| w.snak().set_bit());
                 while otg_device.diepint1.read().inepne().bit_is_clear() {}
@@ -396,7 +402,7 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
 
                 // We're ready to retry sending the feedback packet again
                 self.audio_feedback_needed = true;
-            //}
+            }
         }
     }
 
