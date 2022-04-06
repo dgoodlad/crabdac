@@ -85,6 +85,8 @@ mod app {
         i2s_dma_transfer: I2sDmaTransfer,
 
         feedback_clock_counter: u32,
+
+        buffered_byte_count: u32,
     }
 
     #[local]
@@ -108,11 +110,11 @@ mod app {
     const USB_FRAME_RATE: u32 = 1000;
     const USB_AUDIO_FRAME_SIZE: usize = (((SAMPLE_RATE / USB_FRAME_RATE) + 1) * CHANNELS * SLOT_SIZE / 8) as usize;
     const BUFFER_SIZE: usize = USB_AUDIO_FRAME_SIZE * 4;
-    const I2S_DMA_SIZE: usize = 64 as usize;
+    const I2S_DMA_SIZE: usize = USB_AUDIO_FRAME_SIZE;
 
     #[init(local = [
         heap: [u8; 1024] = [0; 1024],
-        mute_buffer: [u16; I2S_DMA_SIZE] = [0; I2S_DMA_SIZE],
+        mute_buffer: [u16; I2S_DMA_SIZE / 2] = [0; I2S_DMA_SIZE / 2],
         audio_data_buffer: bbqueue::BBBuffer<BUFFER_SIZE> = bbqueue::BBBuffer::new(),
         usb_bus: Option<UsbBusAllocator<UsbBusType>> = None,
         usb_ep_memory: [u32; 320] = [0; 320],
@@ -152,7 +154,6 @@ mod app {
 
         let gpioa: gpioa::Parts = cx.device.GPIOA.split();
         let gpiob: gpiob::Parts = cx.device.GPIOB.split();
-        let gpioc: gpioc::Parts = cx.device.GPIOC.split();
 
         defmt::info!("INIT :: Configuring I2S");
         let i2s_pins: I2sPins = (
@@ -183,8 +184,8 @@ mod app {
             mute_buffer,
             None,
             DmaConfig::default()
-                .priority(hal::dma::config::Priority::High)
-                .double_buffer(false)
+                //.priority(hal::dma::config::Priority::High)
+                //.double_buffer(false)
                 .memory_increment(true)
                 .transfer_complete_interrupt(true),
         );
@@ -222,12 +223,15 @@ mod app {
             UsbAudioFrequencyFeedback::new(cx.device.TIM2, CaptureChannel::Channel1, gpioa.pa5.into_alternate());
         audio_feedback_timer.start();
 
+        print_buffered_byte_count::spawn_after(5.secs()).unwrap();
+
         defmt::info!("INIT :: Finished");
 
         (
             Shared {
                 i2s_dma_transfer,
                 feedback_clock_counter: (256 * SAMPLE_RATE * 4 / USB_FRAME_RATE) << 4, // number of mclk pulses (256 * F_s) in 4 usb frames
+                buffered_byte_count: 0,
             },
             Local {
                 audio_data_producer,
@@ -250,11 +254,17 @@ mod app {
         }
     }
 
+    #[task(priority = 2, shared = [buffered_byte_count])]
+    fn print_buffered_byte_count(mut cx: print_buffered_byte_count::Context) {
+        defmt::info!("{} buffered", cx.shared.buffered_byte_count.lock(|i| *i));
+        print_buffered_byte_count::spawn_after(1.secs()).unwrap();
+    }
+
     #[task(binds = DMA1_STREAM4,
            priority = 3,
            local = [audio_data_consumer, audio_data_read_grant],
-           shared = [i2s_dma_transfer])]
-    fn i2s_dma_handler(cx: i2s_dma_handler::Context) {
+           shared = [i2s_dma_transfer, buffered_byte_count])]
+    fn i2s_dma_handler(mut cx: i2s_dma_handler::Context) {
         let consumer: &mut bbqueue::Consumer<'static, BUFFER_SIZE> = cx.local.audio_data_consumer;
         let old_grant: &mut Option<bbqueue::GrantR<'static, BUFFER_SIZE>> = cx.local.audio_data_read_grant;
         let transfer: &mut I2sDmaTransfer = cx.shared.i2s_dma_transfer;
@@ -273,16 +283,20 @@ mod app {
                     defmt::debug!("I2S :: Processing a grant of {} bytes", grant.len());
                     let bytes: &'static [u8] = if grant.len() > I2S_DMA_SIZE {
                         grant.to_release(I2S_DMA_SIZE);
+                        cx.shared.buffered_byte_count.lock(|i| *i -= I2S_DMA_SIZE as u32);
                         unsafe { &grant.as_static_buf()[0..I2S_DMA_SIZE] }
                     } else {
                         grant.to_release(grant.len());
+                        cx.shared.buffered_byte_count.lock(|i| *i -= grant.len() as u32);
                         unsafe { &grant.as_static_buf() }
                     };
                     old_grant.replace(grant);
                     let words: &'static [u16] = cast_slice(bytes);
                     transfer.next_transfer(words).unwrap();
+                    //unsafe { transfer.next_transfer_with(|_, _| (words, ())).unwrap(); }
                 },
                 Err(_) => {
+                    defmt::debug!("I2S :: Failed to read grant");
                     unsafe { transfer.next_transfer_with(|buf, _| (buf, ())).unwrap(); }
                 }
             }
@@ -298,9 +312,9 @@ mod app {
                usb_audio,
                usb_audio_buf: Aligned<A4, [u8; USB_AUDIO_FRAME_SIZE]> = Aligned([0; USB_AUDIO_FRAME_SIZE])
            ],
-           shared = [feedback_clock_counter]
+           shared = [feedback_clock_counter, buffered_byte_count]
     )]
-    fn usb_handler(cx: usb_handler::Context) {
+    fn usb_handler(mut cx: usb_handler::Context) {
         let producer: &mut bbqueue::Producer<'static, BUFFER_SIZE> = cx.local.audio_data_producer;
         let usb_dev: &mut UsbDevice<UsbBusType> = cx.local.usb_dev;
         let usb_audio: &mut SimpleStereoOutput<UsbBusType> = cx.local.usb_audio;
@@ -339,6 +353,7 @@ mod app {
                             grant_bytes[2] = sample_bytes[0];
                             grant_bytes[3] = sample_bytes[1];
                         }
+                        cx.shared.buffered_byte_count.lock(|i| *i += bytes_received as u32);
                         grant.commit(bytes_received);
                     },
                     Err(e) => defmt::warn!("USB :: grant failed {:?}", defmt::Debug2Format(&e)),
@@ -347,7 +362,7 @@ mod app {
         }
     }
 
-    #[task(binds = TIM2, priority = 1, local = [audio_feedback_timer], shared = [feedback_clock_counter])]
+    #[task(binds = TIM2, priority = 3, local = [audio_feedback_timer], shared = [feedback_clock_counter])]
     fn tim2(mut cx: tim2::Context) {
         static mut COUNTER: ClockCounter = ClockCounter{ticks: 0, frames: 0, mck_to_fs_ratio: 8};
 

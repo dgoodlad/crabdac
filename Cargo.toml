@@ -28,7 +28,8 @@ fixed = "1.13.1"
 # Support isochronous endpoints
 usb-device = { git = "https://github.com/dgoodlad/usb-device", branch = "crabdac" }
 # Support isochronous endpoints
-synopsys-usb-otg = { git = "https://github.com/dgoodlad/synopsys-usb-otg", branch = "isochronous" }
+#synopsys-usb-otg = { git = "https://github.com/dgoodlad/synopsys-usb-otg", branch = "isochronous" }
+synopsys-usb-otg = { path = "../synopsys-usb-otg" }
 # Support ITM1_RMP in TIM2_OR
 stm32f4 = { path = "./stm32f4" }
 # Upgrade to synopsys-otg 0.3.0

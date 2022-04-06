@@ -43,7 +43,7 @@ use core::cell::RefCell;
 use cortex_m::interrupt::Mutex;
 use cortex_m_rt::entry;
 
-use stm32_i2s_v12x::format::{Data16Frame16, FrameFormat};
+use stm32_i2s_v12x::format::{Data16Frame16, FrameFormat, Data24Frame32};
 use stm32_i2s_v12x::{MasterClock, MasterConfig, Polarity, TransmitMode};
 
 use stm32f4xx_hal::dma::config::DmaConfig;
@@ -61,12 +61,22 @@ const SINE_SAMPLES: usize = 64;
 /// A sine wave spanning 64 samples
 ///
 /// With a sample rate of 48 kHz, this produces a 750 Hz tone.
-const SINE_750: [i16; SINE_SAMPLES] = [
-    0, 3211, 6392, 9511, 12539, 15446, 18204, 20787, 23169, 25329, 27244, 28897, 30272, 31356,
-    32137, 32609, 32767, 32609, 32137, 31356, 30272, 28897, 27244, 25329, 23169, 20787, 18204,
-    15446, 12539, 9511, 6392, 3211, 0, -3211, -6392, -9511, -12539, -15446, -18204, -20787, -23169,
-    -25329, -27244, -28897, -30272, -31356, -32137, -32609, -32767, -32609, -32137, -31356, -30272,
-    -28897, -27244, -25329, -23169, -20787, -18204, -15446, -12539, -9511, -6392, -3211,
+//const SINE_750: [i32; SINE_SAMPLES] = [
+//    0, 3211, 6392, 9511, 12539, 15446, 18204, 20787, 23169, 25329, 27244, 28897, 30272, 31356,
+//    32137, 32609, 32767, 32609, 32137, 31356, 30272, 28897, 27244, 25329, 23169, 20787, 18204,
+//    15446, 12539, 9511, 6392, 3211, 0, -3211, -6392, -9511, -12539, -15446, -18204, -20787, -23169,
+//    -25329, -27244, -28897, -30272, -31356, -32137, -32609, -32767, -32609, -32137, -31356, -30272,
+//    -28897, -27244, -25329, -23169, -20787, -18204, -15446, -12539, -9511, -6392, -3211,
+//];
+const SINE_750: [i32; SINE_SAMPLES] = [
+    8388608,9210835,10025144,10823692,11598789,12342970,13049069,13710285,
+    14320250,14873090,15363481,15786700,16138671,16416005,16616031,16736823,
+    16777216,16736823,16616031,16416005,16138671,15786700,15363481,14873090,
+    14320250,13710285,13049069,12342970,11598789,10823692,10025144,9210835,
+    8388608,7566381,6752072,5953524,5178427,4434246,3728147,3066931,
+    2456966,1904126,1413735,990516,638545,361211,161185,40393,
+    0,40393,161185,361211,638545,990516,1413735,1904126,
+    2456966,3066931,3728147,4434246,5178427,5953524,6752072,7566381,
 ];
 
 #[entry]
@@ -75,14 +85,14 @@ fn main() -> ! {
     // 1. It's a way to get a &'static mut
     // 2. Its type is u16 instead of i16
     // 3. Each sample is repeated (for the left and right channels)
-    static mut SINE_750_MUT: [u16; SINE_SAMPLES * 2] = [0; SINE_SAMPLES * 2];
+    static mut SINE_750_MUT: [u16; SINE_SAMPLES * 2 * 2] = [0; SINE_SAMPLES * 2 * 2];
 
     let cp = CorePeripherals::take().unwrap();
     let dp = Peripherals::take().unwrap();
 
     let rcc = dp.RCC.constrain();
     // The 86 MHz frequency can be divided to get a sample rate very close to 48 kHz.
-    let clocks = rcc.cfgr.use_hse(25.MHz()).i2s_clk(86.MHz()).freeze();
+    let clocks = rcc.cfgr.use_hse(25.MHz()).i2s_clk(98304.kHz()).freeze();
 
     let gpioa = dp.GPIOA.split();
     let gpiob = dp.GPIOB.split();
@@ -102,35 +112,30 @@ fn main() -> ! {
     let i2s_clock = hal_i2s.input_clock();
 
     // Audio timing configuration:
-    // Sample rate 48 kHz
-    // 16 bits per sample -> SCK rate 1.536 MHz
-    // MCK frequency = 256 * sample rate -> MCK rate 12.228 MHz (also equal to 8 * SCK rate)
-    let sample_rate = 48000;
+    // Sample rate 96 kHz
+    // 32 bits per frame * 2 channels -> SCK rate 6.144 MHz
+    // MCK frequency = 256 * sample rate -> MCK rate 24.576 MHz (also equal to 4 * SCK rate)
+    let sample_rate = 96000;
 
     let i2s = stm32_i2s_v12x::I2s::new(hal_i2s);
     let mut i2s = i2s.configure_master_transmit(MasterConfig::with_sample_rate(
         i2s_clock.raw(),
         sample_rate,
-        Data16Frame16,
+        Data24Frame32,
         FrameFormat::PhilipsI2s,
         Polarity::IdleHigh,
         MasterClock::Enable,
     ));
     i2s.set_dma_enabled(true);
 
-    unsafe {
-        // Copy samples from flash into the buffer that DMA will use
-        let mut dest_iter = SINE_750_MUT.iter_mut();
-        for sample in SINE_750.iter() {
-            // Duplicate sample for the left and right channels
-            let left = dest_iter.next().unwrap();
-            let right = dest_iter.next().unwrap();
-            *left = *sample as u16;
-            *right = *sample as u16;
-        }
+    for (dma_words, sample) in SINE_750_MUT.chunks_mut(4).zip(SINE_750.iter()) {
+        dma_words[0] = (sample & 0xffff) as u16;
+        dma_words[1] = (sample >> 16) as u16;
+        dma_words[2] = (sample & 0xffff) as u16;
+        dma_words[3] = (sample >> 16) as u16;
     }
 
-    // Set up DMA: DMA 1 stream 5 channel 0 memory -> peripheral
+    // Set up DMA: DMA 1 stream 4 channel 0 memory -> peripheral
     let dma1_streams = StreamsTuple::new(dp.DMA1);
     let dma_config = DmaConfig::default()
         .memory_increment(true)
@@ -163,10 +168,10 @@ type I2sDmaTransfer = Transfer<
                 PB15<Alternate<5>>,
             ),
         >,
-        TransmitMode<Data16Frame16>,
+        TransmitMode<Data24Frame32>,
     >,
     MemoryToPeripheral,
-    &'static mut [u16; SINE_SAMPLES * 2],
+    &'static mut [u16; SINE_SAMPLES * 2 * 2],
     0,
 >;
 
