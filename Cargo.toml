@@ -21,8 +21,10 @@ defmt = "0.3.0"
 defmt-rtt = "0.3.0"
 panic-probe = { version = "0.3.0", features = ["print-defmt"] }
 stm32f4xx-hal = { version = "0.13.2", features = ["stm32f411", "rtic", "usb_fs", "i2s", "defmt"] }
-# TODO(4) enter your HAL here
-# some-hal = "1.2.3"
+
+[patch.crates-io]
+# This crate messes with memory.x in the released 0.2 version
+stm32_i2s_v12x = { git = "https://github.com/samcrow/stm32_i2s", branch = "master" }
 
 [dev-dependencies]
 defmt-test = "0.3.0"
