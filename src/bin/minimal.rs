@@ -5,6 +5,13 @@ use crabdac_firmware as _;
 
 #[rtic::app(device = stm32f4xx_hal::pac, dispatchers = [TIM3, TIM4])]
 mod app {
+    use stm32f4xx_hal::{
+        prelude::*,
+        timer::MonoTimerUs,
+        timer::Timer,
+        pac::TIM5
+    };
+
     #[shared]
     struct Shared {
 
@@ -15,9 +22,23 @@ mod app {
 
     }
 
+    #[monotonic(binds = TIM5, default = true)]
+    type MicrosecMono = MonoTimerUs<TIM5>;
+
     #[init]
     fn init(cx: init::Context) -> (Shared, Local, init::Monotonics) {
         defmt::info!("init");
+
+        let rcc = cx.device.RCC.constrain();
+        let clocks = rcc.cfgr
+                        .use_hse(25.MHz())
+                        .sysclk(96.MHz())
+                        .hclk(96.MHz())
+                        .pclk1(48.MHz())
+                        .pclk2(96.MHz())
+                        .freeze();
+
+        let mono = cx.device.TIM5.monotonic_us(&clocks);
 
         (
             Shared {
@@ -26,9 +47,7 @@ mod app {
             Local {
 
             },
-            init::Monotonics(
-
-            ),
+            init::Monotonics(mono),
         )
     }
 
