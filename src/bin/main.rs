@@ -12,7 +12,17 @@ mod app {
         timer::MonoTimerUs,
         gpio::{PA0, Alternate},
         pac::{TIM2, TIM5},
+        otg_fs::{
+            USB,
+            UsbBus,
+            UsbBusType,
+        }
     };
+
+    use usb_device::prelude::*;
+    use usb_device::bus::UsbBusAllocator;
+
+    use usbd_serial::SerialPort;
 
     use bbqueue::{
         BBBuffer,
@@ -38,12 +48,19 @@ mod app {
         producer: Producer<'static, BUFFER_SIZE>,
         consumer: Consumer<'static, BUFFER_SIZE>,
         sof_timer: SofTimer<TIM2, PA0<Alternate<1>>>,
+
+        usb_dev: UsbDevice<'static, UsbBusType>,
+        serial: SerialPort<'static, UsbBusType>
     }
 
     #[monotonic(binds = TIM5, default = true)]
     type MicrosecMono = MonoTimerUs<TIM5>;
 
-    #[init(local = [buffer: BBBuffer<BUFFER_SIZE> = BBBuffer::new()])]
+    #[init(local = [
+        buffer: BBBuffer<BUFFER_SIZE> = BBBuffer::new(),
+        usb_bus: Option<UsbBusAllocator<UsbBusType>> = None,
+        usb_ep_memory: [u32; 320] = [0; 320],
+    ])]
     fn init(cx: init::Context) -> (Shared, Local, init::Monotonics) {
         defmt::info!("init");
 
@@ -68,6 +85,28 @@ mod app {
         let tim2_etr = gpioa.pa0.into_alternate();
         let sof_timer = SofTimer::new(cx.device.TIM2, tim2_etr);
 
+        let usb = USB {
+            usb_global: cx.device.OTG_FS_GLOBAL,
+            usb_device: cx.device.OTG_FS_DEVICE,
+            usb_pwrclk: cx.device.OTG_FS_PWRCLK,
+            pin_dm: gpioa.pa11.into_alternate(),
+            pin_dp: gpioa.pa12.into_alternate(),
+            hclk: clocks.hclk(),
+        };
+
+        *cx.local.usb_bus = Some(UsbBus::new(usb, cx.local.usb_ep_memory));
+
+        let serial = SerialPort::new(&cx.local.usb_bus.as_ref().unwrap());
+
+        let usb_dev = UsbDeviceBuilder::new(cx.local.usb_bus.as_ref().unwrap(), UsbVidPid(0x1209, 0x0001))
+            .manufacturer("Crabs Pty Ltd.")
+            .product("CrabDAC")
+            .serial_number("420.69")
+            .composite_with_iads()
+            .max_packet_size_0(8)
+            .self_powered(true)
+            .build();
+
         (
             Shared {
             },
@@ -75,6 +114,8 @@ mod app {
                 producer,
                 consumer,
                 sof_timer,
+                usb_dev,
+                serial,
             },
             init::Monotonics(mono),
         )
@@ -89,23 +130,28 @@ mod app {
         }
     }
 
-    #[task(binds = OTG_FS, local = [producer])]
+    #[task(binds = OTG_FS, local = [producer, usb_dev, serial])]
     fn otg_fs(cx: otg_fs::Context) {
         let producer: &mut bbqueue::Producer<'static, BUFFER_SIZE> = cx.local.producer;
+        let usb_dev: &mut UsbDevice<UsbBusType> = cx.local.usb_dev;
+        let serial: &mut SerialPort<UsbBusType> = cx.local.serial;
 
         // TODO replace this with real USB data
         let bytes_received: usize = MAX_FRAME_SIZE;
         let data: [u8; MAX_FRAME_SIZE] = [0; MAX_FRAME_SIZE];
         let volume_amp: i32 = 1;
 
-        match producer.grant_exact(bytes_received) {
-            Ok(mut grant) => {
-                data[0..bytes_received].as_slice_of::<i32>().unwrap().iter()
-                    .zip(grant.as_mut_slice_of::<i32>().unwrap())
-                    .for_each(|(sample, dest)| *dest = sample * volume_amp);
-                grant.commit(bytes_received);
-            },
-            Err(e) => defmt::warn!("USB :: Audio Buffer Overflow {:?}", defmt::Debug2Format(&e)),
+        while usb_dev.poll(&mut [serial]) {
         }
+
+        //match producer.grant_exact(bytes_received) {
+        //    Ok(mut grant) => {
+        //        data[0..bytes_received].as_slice_of::<i32>().unwrap().iter()
+        //            .zip(grant.as_mut_slice_of::<i32>().unwrap())
+        //            .for_each(|(sample, dest)| *dest = sample * volume_amp);
+        //        grant.commit(bytes_received);
+        //    },
+        //    Err(e) => defmt::warn!("USB :: Audio Buffer Overflow {:?}", defmt::Debug2Format(&e)),
+        //}
     }
 }

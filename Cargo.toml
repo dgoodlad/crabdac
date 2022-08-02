@@ -24,6 +24,10 @@ defmt-rtt = "0.3.2"
 panic-probe = { version = "0.3.0", features = ["print-defmt"] }
 stm32f4xx-hal = { version = "0.13.2", features = ["stm32f411", "rtic", "usb_fs", "i2s", "defmt"] }
 synopsys-usb-otg = { version = "0.3.0", features = ["fs"] }
+usb-device = { version = "0.2.3" }
+
+# TEMP
+usbd-serial = "0.1.1"
 
 [patch.crates-io]
 stm32f4xx-hal = { git = "https://github.com/dgoodlad/stm32f4xx-hal", branch = "synopsys-otg-0.3.0" }
