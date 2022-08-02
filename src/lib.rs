@@ -5,6 +5,8 @@ use stm32f4xx_hal as _; // memory layout
 use defmt_rtt as _; // global logger
 use panic_probe as _;
 
+pub mod sof_timer;
+
 // same panicking *behavior* as `panic-probe` but doesn't print a panic message
 // this prevents the panic message being printed *twice* when `defmt::panic` is invoked
 #[defmt::panic_handler]

@@ -14,6 +14,8 @@ name = "integration"
 harness = false
 
 [dependencies]
+bbqueue = "0.5.1"
+byte-slice-cast = { version = "1.2.1", default-features = false }
 cortex-m = "0.7.5"
 cortex-m-rt = "0.7.1"
 cortex-m-rtic = "1.1.3"
