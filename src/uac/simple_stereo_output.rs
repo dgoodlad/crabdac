@@ -341,69 +341,6 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
     }
 
     fn poll(&mut self) {
-        // The synopsys crate (and usb-device above that) doesn't support
-        // reporting incomplete isochronous IN transfers. We've got to trap them
-        // ourselves and follow the procedure from the reference manual to reset
-        // the endpoint. Once that's done, we can immediately re-attempt to
-        // transmit.
-        //
-        // Tokens    Interrupts        Action
-        //
-        // SOF
-        // ...
-        // IN 1
-        //           EP1 TXFE
-        // ...
-        //           EOPF &
-        //           IISOIXFR          Disable & reset endpoint;
-        //                             Fill EP1 TX FIFO (write to endpoint)
-        // ...
-        // SOF
-        // ...
-        // IN                          Core transmits from TX FIFO
-        //           XFRC              Fill EP1 TX FIFO (write to endpoint)
-        // ...
-        // SOF
-        // ...
-        // IN                          Core transmits from TX FIFO
-        //           XFRC              Fill EP1 TX FIFO (write to endpoint)
-        // ...
-        //
-        let otg_device = unsafe { &*pac::OTG_FS_DEVICE::ptr() };
-        let otg_global = unsafe { &*pac::OTG_FS_GLOBAL::ptr() };
-        if otg_global.gintsts.read().iisoixfr().bit_is_set() {
-            defmt::warn!("GINTSTS: {:b}", otg_global.gintsts.read().bits());
-            defmt::warn!("DIEPINT0: {:b}", otg_device.diepint0.read().bits());
-            defmt::warn!("DIEPINT1: {:b}", otg_device.diepint1.read().bits());
-            otg_global.gintsts.write(|w| w.iisoixfr().set_bit());
-
-            // TODO OTG FS DIEPINTx is meant to have NAK at bit 13
-            //if otg_device.diepint1.read().nak().bit_is_set() {
-            if otg_device.diepint1.read().bits().bitand(1 << 13) > 0 {
-                // Set the endpoint to NAK mode
-                otg_device.diepctl1.modify(|_,w| w.snak().set_bit());
-                while otg_device.diepint1.read().inepne().bit_is_clear() {}
-
-                // Disable the endpoint
-                otg_device.diepctl1.modify(|_,w| w
-                                            .snak().set_bit()
-                                            .epdis().set_bit()
-                );
-                while otg_device.diepint1.read().epdisd().bit_is_clear() {}
-                otg_device.diepint1.modify(|_,w| w.epdisd().set_bit());
-                assert!(otg_device.diepctl1.read().epena().bit_is_clear());
-                assert!(otg_device.diepctl1.read().epdis().bit_is_clear());
-
-                // Flush the TX FIFO
-                otg_global.grstctl.modify(|_,w| unsafe {
-                    w.txfflsh().set_bit().txfnum().bits(0x01)
-                });
-                while otg_global.grstctl.read().txfflsh().bit_is_set() {}
-
-                // We're ready to retry sending the feedback packet again
-                self.audio_feedback_needed = true;
-            }
-        }
     }
 
     fn control_out(&mut self, xfer: ControlOut<B>) {
@@ -456,9 +393,9 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
                                             self.mute = xfer.data()[0] != 0;
                                             return xfer.accept().unwrap();
                                         } else if cs_request.control_selector == FU_VOLUME_CONTROL {
-                                            defmt::info!("usb audio :: Set Volume = {:?}", xfer.data());
                                             let data = xfer.data();
                                             self.volume = i16::from_le_bytes([data[0], data[1]]);
+                                            defmt::info!("usb audio :: Set Volume = {:?}", self.volume);
                                             return xfer.accept().unwrap();
                                         }
                                     }
