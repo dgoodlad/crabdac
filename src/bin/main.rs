@@ -22,6 +22,8 @@ mod app {
     use usb_device::prelude::*;
     use usb_device::bus::UsbBusAllocator;
 
+    use aligned::{Aligned, A4};
+
     use bbqueue::{
         BBBuffer,
         Consumer,
@@ -38,7 +40,8 @@ mod app {
     const USB_SAMPLE_SIZE: usize = 4;
     const SAMPLE_RATE: usize = 96000;
     const USB_FRAME_RATE: usize = 1000;
-    const MAX_FRAME_SIZE: usize = CHANNELS * (USB_SAMPLE_SIZE * SAMPLE_RATE / USB_FRAME_RATE + 1);
+    const MAX_SAMPLES_PER_FRAME: usize = SAMPLE_RATE / USB_FRAME_RATE + 1;
+    const MAX_FRAME_SIZE: usize = CHANNELS * USB_SAMPLE_SIZE * MAX_SAMPLES_PER_FRAME;
     const BUFFER_SIZE: usize = MAX_FRAME_SIZE * 2;
 
     #[shared]
@@ -138,19 +141,43 @@ mod app {
     }
 
     #[inline(never)]
+    #[link_section = ".data.sof_timer_handler"]
+    #[task(binds = TIM2, priority = 3, local = [sof_timer])]
+    fn sof_timer_handler(cx: sof_timer_handler::Context) {
+        let period = cx.local.sof_timer.get_period_clocks();
+        defmt::debug!("SOF :: {0=14..24}.{0=0..14}", period);
+    }
+
+    #[inline(never)]
     #[link_section = ".data.usb_handler"]
-    #[task(binds = OTG_FS, local = [producer, usb_dev, usb_audio])]
+    #[task(binds = OTG_FS, priority = 2, local = [
+        producer,
+        usb_dev,
+        usb_audio,
+        usb_audio_buf: Aligned<A4, [u8; MAX_FRAME_SIZE]> = Aligned([0; MAX_FRAME_SIZE])
+    ])]
     fn usb_handler(cx: usb_handler::Context) {
         let producer: &mut bbqueue::Producer<'static, BUFFER_SIZE> = cx.local.producer;
         let usb_dev: &mut UsbDevice<UsbBusType> = cx.local.usb_dev;
         let usb_audio: &mut SimpleStereoOutput<UsbBusType> = cx.local.usb_audio;
+        let usb_audio_buf = &mut **cx.local.usb_audio_buf;
 
         // TODO replace this with real USB data
         let bytes_received: usize = MAX_FRAME_SIZE;
         let data: [u8; MAX_FRAME_SIZE] = [0; MAX_FRAME_SIZE];
         let volume_amp: i32 = 1;
 
-        while usb_dev.poll(&mut [usb_audio]) {
+        usb_dev.poll(&mut [usb_audio]);
+        if usb_audio.audio_feedback_needed {
+            match usb_audio.write_raw_feedback(24576 << 6) {
+                Ok(_) => defmt::debug!("USB :: Feedback OK"),
+                Err(_) => defmt::warn!("USB :: Feedback ERR"),
+            }
+        }
+
+        if usb_audio.audio_data_available {
+            let bytes_received = usb_audio.read_audio_data(usb_audio_buf).unwrap();
+            defmt::debug!("USB :: received {} bytes of audio data", bytes_received);
         }
 
         //match producer.grant_exact(bytes_received) {

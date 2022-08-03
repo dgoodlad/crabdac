@@ -14,6 +14,7 @@ name = "integration"
 harness = false
 
 [dependencies]
+aligned = "0.4.1"
 bbqueue = "0.5.1"
 byte-slice-cast = { version = "1.2.1", default-features = false }
 bytemuck = "1.11.0"
