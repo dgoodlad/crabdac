@@ -5,11 +5,9 @@ use crabdac_firmware as _;
 
 #[rtic::app(device = stm32f4xx_hal::pac, dispatchers = [TIM3, TIM4])]
 mod app {
-    use byte_slice_cast::*;
-
     use stm32f4xx_hal::{
         prelude::*,
-        timer::{MonoTimerUs, fugit::{Duration, ExtU32}},
+        timer::{MonoTimerUs, fugit::ExtU32},
         gpio::{PA0, Alternate},
         pac::{TIM2, TIM5},
         otg_fs::{
@@ -31,10 +29,7 @@ mod app {
     };
 
     use crabdac_firmware::sof_timer::SofTimer;
-    use crabdac_firmware::uac::{
-        simple_stereo_output::SimpleStereoOutput,
-        ClockCounter,
-    };
+    use crabdac_firmware::uac::simple_stereo_output::SimpleStereoOutput;
 
     const CHANNELS: usize = 2;
     const USB_SAMPLE_SIZE: usize = 4;
