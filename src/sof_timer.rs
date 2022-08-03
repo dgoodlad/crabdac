@@ -2,6 +2,8 @@ use core::ops::{Deref, DerefMut};
 
 use stm32f4xx_hal::gpio::{self, Alternate};
 use stm32f4xx_hal::pac::{self, TIM2};
+use stm32f4xx_hal::pac::RCC;
+use stm32f4xx_hal::rcc::{Enable, Reset, BusTimerClock};
 
 pub trait Pins<TIM> {}
 
@@ -53,6 +55,10 @@ where
     PINS: Pins<TIM2>,
 {
     pub fn new(tim: TIM2, pins: PINS) -> Self {
+        let rcc = unsafe { &(*RCC::ptr()) };
+        TIM2::enable(&rcc);
+        TIM2::reset(&rcc);
+
         // Reset (disable) the counter prescaler
         tim.psc.reset();
 
@@ -76,7 +82,7 @@ where
         tim.ccer.modify(|_r, w| w.cc1e().set_bit());
 
         // Enable interrupts for capture channel 1
-        // tim.dier.modify(|_r, w| w.cc1ie().set_bit());
+        tim.dier.modify(|_r, w| w.cc1ie().set_bit());
 
         // Enable the counter
         tim.cr1.write(|w| w.cen().enabled());
