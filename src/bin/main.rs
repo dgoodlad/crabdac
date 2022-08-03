@@ -9,7 +9,7 @@ mod app {
 
     use stm32f4xx_hal::{
         prelude::*,
-        timer::MonoTimerUs,
+        timer::{MonoTimerUs, fugit::{Duration, ExtU32}},
         gpio::{PA0, Alternate},
         pac::{TIM2, TIM5},
         otg_fs::{
@@ -176,8 +176,11 @@ mod app {
         }
 
         if usb_audio.audio_data_available {
-            let bytes_received = usb_audio.read_audio_data(usb_audio_buf).unwrap();
-            defmt::debug!("USB :: received {} bytes of audio data", bytes_received);
+            let mut grant = producer.grant_exact(MAX_FRAME_SIZE).unwrap();
+            let bytes_received = usb_audio.read_audio_data(&mut *grant).unwrap();
+            grant.commit(bytes_received);
+            defmt::info!("USB :: received 0x{:x} bytes of audio data", bytes_received);
+            fake_i2s::spawn_after(500.micros()).unwrap();
         }
 
         //match producer.grant_exact(bytes_received) {
@@ -189,5 +192,19 @@ mod app {
         //    },
         //    Err(e) => defmt::warn!("USB :: Audio Buffer Overflow {:?}", defmt::Debug2Format(&e)),
         //}
+    }
+
+    #[task(priority = 3, local = [consumer])]
+    fn fake_i2s(cx: fake_i2s::Context) {
+        let consumer = cx.local.consumer;
+
+        match consumer.read() {
+            Ok(grant) => {
+                let len = grant.len();
+                defmt::info!("fake_i2s :: 0x{:x} bytes", len);
+                grant.release(len);
+            },
+            Err(_) => defmt::error!("fake_i2s :: consumer.read() failed"),
+        }
     }
 }
