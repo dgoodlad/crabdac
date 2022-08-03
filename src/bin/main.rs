@@ -22,8 +22,6 @@ mod app {
     use usb_device::prelude::*;
     use usb_device::bus::UsbBusAllocator;
 
-    use usbd_serial::SerialPort;
-
     use bbqueue::{
         BBBuffer,
         Consumer,
@@ -31,6 +29,10 @@ mod app {
     };
 
     use crabdac_firmware::sof_timer::SofTimer;
+    use crabdac_firmware::uac::{
+        simple_stereo_output::SimpleStereoOutput,
+        ClockCounter,
+    };
 
     const CHANNELS: usize = 2;
     const USB_SAMPLE_SIZE: usize = 4;
@@ -50,7 +52,7 @@ mod app {
         sof_timer: SofTimer<TIM2, PA0<Alternate<1>>>,
 
         usb_dev: UsbDevice<'static, UsbBusType>,
-        serial: SerialPort<'static, UsbBusType>
+        usb_audio: SimpleStereoOutput<'static, UsbBusType>,
     }
 
     #[monotonic(binds = TIM5, default = true)]
@@ -96,7 +98,12 @@ mod app {
 
         *cx.local.usb_bus = Some(UsbBus::new(usb, cx.local.usb_ep_memory));
 
-        let serial = SerialPort::new(&cx.local.usb_bus.as_ref().unwrap());
+        let usb_audio = SimpleStereoOutput::new(
+            cx.local.usb_bus.as_ref().unwrap(),
+            96000,
+            4,
+            24
+        );
 
         let usb_dev = UsbDeviceBuilder::new(cx.local.usb_bus.as_ref().unwrap(), UsbVidPid(0x1209, 0x0001))
             .manufacturer("Crabs Pty Ltd.")
@@ -115,7 +122,7 @@ mod app {
                 consumer,
                 sof_timer,
                 usb_dev,
-                serial,
+                usb_audio,
             },
             init::Monotonics(mono),
         )
@@ -132,18 +139,18 @@ mod app {
 
     #[inline(never)]
     #[link_section = ".data.usb_handler"]
-    #[task(binds = OTG_FS, local = [producer, usb_dev, serial])]
+    #[task(binds = OTG_FS, local = [producer, usb_dev, usb_audio])]
     fn usb_handler(cx: usb_handler::Context) {
         let producer: &mut bbqueue::Producer<'static, BUFFER_SIZE> = cx.local.producer;
         let usb_dev: &mut UsbDevice<UsbBusType> = cx.local.usb_dev;
-        let serial: &mut SerialPort<UsbBusType> = cx.local.serial;
+        let usb_audio: &mut SimpleStereoOutput<UsbBusType> = cx.local.usb_audio;
 
         // TODO replace this with real USB data
         let bytes_received: usize = MAX_FRAME_SIZE;
         let data: [u8; MAX_FRAME_SIZE] = [0; MAX_FRAME_SIZE];
         let volume_amp: i32 = 1;
 
-        while usb_dev.poll(&mut [serial]) {
+        while usb_dev.poll(&mut [usb_audio]) {
         }
 
         //match producer.grant_exact(bytes_received) {
