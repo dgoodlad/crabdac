@@ -130,8 +130,10 @@ mod app {
         }
     }
 
+    #[inline(never)]
+    #[link_section = ".data.usb_handler"]
     #[task(binds = OTG_FS, local = [producer, usb_dev, serial])]
-    fn otg_fs(cx: otg_fs::Context) {
+    fn usb_handler(cx: usb_handler::Context) {
         let producer: &mut bbqueue::Producer<'static, BUFFER_SIZE> = cx.local.producer;
         let usb_dev: &mut UsbDevice<UsbBusType> = cx.local.usb_dev;
         let serial: &mut SerialPort<UsbBusType> = cx.local.serial;
