@@ -357,11 +357,11 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
                                 1 => xfer.accept().map(|_| self.set_alt(1) ).unwrap(),
                                 _ => { xfer.reject().unwrap(); },
                             }
-                            defmt::info!("SET_INTERFACE {}", self.alt_setting);
+                            defmt::debug!("SET_INTERFACE {}", self.alt_setting);
                         }
                     },
-                    control::Request::SET_ADDRESS => defmt::info!("USB :: Set address {:?}", request.value),
-                    control::Request::SET_CONFIGURATION => defmt::info!("USB :: Set configuration {:?}", request.value),
+                    control::Request::SET_ADDRESS => defmt::debug!("USB :: Set address {:?}", request.value),
+                    control::Request::SET_CONFIGURATION => defmt::debug!("USB :: Set configuration {:?}", request.value),
                     _ => { defmt::warn!("Unknown standard request {:?}", defmt::Debug2Format(request)); },
                 }
             },
@@ -457,15 +457,15 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
                                     if entity_id == self.feature_unit.into() {
                                         if cs_request.control_selector == descriptors::feature_unit_control_selector::FU_MUTE_CONTROL {
                                             if cs_request.request_code == RequestCode::Cur {
-                                                defmt::info!("usb audio :: GET MUTE Cur");
+                                                defmt::debug!("usb audio :: GET MUTE Cur");
                                                 return xfer.accept_with(&[self.mute as u8]).unwrap();
                                             }
                                         } else if cs_request.control_selector == descriptors::feature_unit_control_selector::FU_VOLUME_CONTROL {
                                             if cs_request.request_code == RequestCode::Cur {
-                                                defmt::info!("usb audio :: GET VOLUME Cur");
+                                                defmt::debug!("usb audio :: GET VOLUME Cur");
                                                 return xfer.accept_with(&self.volume.to_le_bytes()).unwrap();
                                             } else if cs_request.request_code == RequestCode::Range {
-                                                defmt::info!("usb audio :: GET VOLUME Range");
+                                                defmt::debug!("usb audio :: GET VOLUME Range");
                                                 return xfer.accept_with(&[
                                                     0x01, 0x00, // 1 sub-range
                                                     0x00, 0x82, // -127 dB min
@@ -497,7 +497,7 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
                             }
                         } else if interface_number == self.if_audio_stream.into() && entity_id == None {
                             if cs_request.control_selector == AS_ACT_ALT_SETTING_CONTROL {
-                                defmt::info!("GET ALT_SETTING_CONTROL {}", self.alt_setting);
+                                defmt::debug!("GET ALT_SETTING_CONTROL {}", self.alt_setting);
                                 return xfer.accept_with(&[self.alt_setting]).unwrap();
                             } else if cs_request.control_selector == AS_VAL_ALT_SETTINGS_CONTROL {
                                 return xfer.accept_with(&[

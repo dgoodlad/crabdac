@@ -5,14 +5,16 @@ use crabdac_firmware as _;
 
 #[rtic::app(device = stm32f4xx_hal::pac, dispatchers = [TIM3, TIM4])]
 mod app {
-    use core::intrinsics::transmute;
-
     use stm32f4xx_hal::{
         prelude::*,
 
         dma::{
+            config::{DmaConfig, Priority, BurstMode},
             traits::StreamISR,
+            MemoryToPeripheral,
             Stream4,
+            StreamsTuple,
+            Transfer,
         },
         gpio::{
             Alternate,
@@ -37,7 +39,7 @@ mod app {
             UsbBus,
             UsbBusType,
         },
-        timer::{MonoTimerUs, fugit::{ExtU32, Instant, MicrosDurationU32}}, dma::{StreamsTuple, Transfer, config::{DmaConfig, Priority, BurstMode}, MemoryToPeripheral},
+        timer::MonoTimerUs,
     };
 
     use usb_device::prelude::*;
@@ -63,7 +65,7 @@ mod app {
     const USB_FRAME_RATE: usize = 1000;
     const MAX_SAMPLES_PER_FRAME: usize = SAMPLE_RATE / USB_FRAME_RATE + 1;
     const MAX_FRAME_SIZE: usize = CHANNELS * USB_SAMPLE_SIZE * MAX_SAMPLES_PER_FRAME;
-    const BUFFER_SIZE: usize = MAX_FRAME_SIZE * 4;
+    const BUFFER_SIZE: usize = MAX_FRAME_SIZE * 8;
 
     #[shared]
     struct Shared {
@@ -84,6 +86,8 @@ mod app {
 
     #[monotonic(binds = TIM5, default = true)]
     type MicrosecMono = MonoTimerUs<TIM5>;
+
+    defmt::timestamp!("{=u32:us}", { monotonics::now().ticks() });
 
     #[init(local = [
         buffer: BBBuffer<BUFFER_SIZE> = BBBuffer::new(),
@@ -161,7 +165,7 @@ mod app {
         let mut i2s_driver = I2sDriver::new(i2s, i2s_config);
         i2s_driver.set_tx_dma(true);
         i2s_driver.set_tx_interrupt(true);
-        defmt::info!("init :: i2s sample rate {}", i2s_driver.sample_rate());
+        defmt::info!("INIT :: i2s sample rate {}", i2s_driver.sample_rate());
 
         let dma1_stream4 = StreamsTuple::new(cx.device.DMA1).4;
         let mut i2s_dma = Transfer::init_memory_to_peripheral(
@@ -182,8 +186,6 @@ mod app {
                 .transfer_complete_interrupt(true),
         );
         i2s_dma.start(|i2s| i2s.enable());
-
-        defmt::timestamp!("{=u32:us}", { monotonics::now().ticks() });
 
         (
             Shared {
@@ -257,6 +259,9 @@ mod app {
             let mut grant = producer.grant_exact(MAX_FRAME_SIZE).unwrap();
             defmt::debug!("WG: {:#06x} +{:#05x}", grant.buf().as_ptr() as usize - 0x2001e690, grant.len());
             let bytes_received = usb_audio.read_audio_data(&mut *grant).unwrap();
+            if bytes_received < (96 * 4 * 2) {
+                defmt::debug!("usb_handler :: {} samples received", bytes_received / 4 / 2);
+            }
             for w in grant.as_mut_slice_of::<u32>().unwrap().iter_mut() {
                 *w = *w << 16 | *w >> 16;
             }
