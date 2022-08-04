@@ -29,7 +29,7 @@ synopsys-usb-otg = { version = "0.3.0", features = ["fs"] }
 usb-device = { version = "0.2.8", features = ["control-buffer-256"] }
 
 [patch.crates-io]
-stm32f4xx-hal = { git = "https://github.com/dgoodlad/stm32f4xx-hal", branch = "synopsys-otg-0.3.0" }
+stm32f4xx-hal = { git = "https://github.com/stm32-rs/stm32f4xx-hal", branch = "master" }
 # This crate messes with memory.x in the released 0.2 version
 stm32_i2s_v12x = { git = "https://github.com/samcrow/stm32_i2s", branch = "master" }
 # Include isochronous patch from rust-embedded-community/usb-device#60
