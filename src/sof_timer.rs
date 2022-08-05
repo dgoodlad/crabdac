@@ -3,7 +3,7 @@ use core::ops::{Deref, DerefMut};
 use stm32f4xx_hal::gpio::{self, Alternate};
 use stm32f4xx_hal::pac::{self, TIM2};
 use stm32f4xx_hal::pac::RCC;
-use stm32f4xx_hal::rcc::{Enable, Reset, BusTimerClock};
+use stm32f4xx_hal::rcc::{Enable, Reset};
 
 pub trait Pins<TIM> {}
 

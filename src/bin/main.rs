@@ -39,13 +39,17 @@ mod app {
             UsbBus,
             UsbBusType,
         },
-        timer::MonoTimerUs,
+        timer::{
+            fugit::{
+                Instant,
+                ExtU32,
+            },
+            MonoTimerUs
+        },
     };
 
     use usb_device::prelude::*;
     use usb_device::bus::UsbBusAllocator;
-
-    use aligned::{Aligned, A4};
 
     use bbqueue::{
         BBBuffer,
@@ -70,6 +74,7 @@ mod app {
     #[shared]
     struct Shared {
         audio_feedback: u32,
+        buffered_byte_count: usize,
     }
 
     #[local]
@@ -90,6 +95,7 @@ mod app {
     defmt::timestamp!("{=u32:us}", { monotonics::now().ticks() });
 
     #[init(local = [
+        #[link_section = ".data.buffer"]
         buffer: BBBuffer<BUFFER_SIZE> = BBBuffer::new(),
         usb_bus: Option<UsbBusAllocator<UsbBusType>> = None,
         usb_ep_memory: [u32; 320] = [0; 320],
@@ -175,13 +181,8 @@ mod app {
             None,
             DmaConfig::default()
                 .priority(Priority::High)
-                //.double_buffer(false)
-                //.memory_burst(BurstMode::Burst16)
                 .memory_increment(true)
                 .peripheral_increment(false)
-                .fifo_enable(false)
-                .memory_burst(BurstMode::NoBurst)
-                .fifo_error_interrupt(false)
                 .transfer_error_interrupt(true)
                 .transfer_complete_interrupt(true),
         );
@@ -190,6 +191,7 @@ mod app {
         (
             Shared {
                 audio_feedback: (SAMPLE_RATE as u32 * 256 / 1000) << 6,
+                buffered_byte_count: 0,
             },
             Local {
                 producer,
@@ -214,7 +216,7 @@ mod app {
 
     #[inline(never)]
     #[link_section = ".data.sof_timer_handler"]
-    #[task(binds = TIM2, priority = 3, local = [sof_timer, clocks: u32 = 0, sof_count: u8 = 0], shared = [audio_feedback])]
+    #[task(binds = TIM2, priority = 2, local = [sof_timer, clocks: u32 = 0, sof_count: u8 = 0], shared = [audio_feedback])]
     fn sof_timer_handler(mut cx: sof_timer_handler::Context) {
         let period = cx.local.sof_timer.get_period_clocks();
 
@@ -230,15 +232,14 @@ mod app {
         }
     }
 
-    #[inline(never)]
-    #[link_section = ".data.usb_handler"]
-    #[task(binds = OTG_FS, priority = 2, local = [
+    #[task(binds = OTG_FS, priority = 1, local = [
         producer,
         usb_dev,
         usb_audio,
-        usb_audio_buf: Aligned<A4, [u8; MAX_FRAME_SIZE]> = Aligned([0; MAX_FRAME_SIZE])
+        rx_bytes: usize = 0,
+        rx_rate_timestamp: Option<Instant<u32, 1, 1000000>> = None,
     ],
-    shared = [audio_feedback])]
+    shared = [audio_feedback, buffered_byte_count])]
     fn usb_handler(mut cx: usb_handler::Context) {
         let start = monotonics::now();
         let producer: &mut bbqueue::Producer<'static, BUFFER_SIZE> = cx.local.producer;
@@ -262,42 +263,64 @@ mod app {
             if bytes_received < (96 * 4 * 2) {
                 defmt::debug!("usb_handler :: {} samples received", bytes_received / 4 / 2);
             }
+
+            // USB PCM data is 24-bit left-justified in a 32-bit value, where
+            // the MSB is the sign bit.
+            //
+            // I2S Philips format expects to send two half-words, with the
+            // most-significant transmitted _first_. To do so, we need to
+            // reverse the memory order of the half-words from the USB format.
+            //
+            // e.g. to transmit the 24-bit value 0x8EAA33 over i2s:
+            //
+            // usb receives [0x00, 0x33, 0xaa, 0x8e]
+            // interpreted as a 32-bit little-endian value: 0x8eaa3300
+            //
+            // swap half-words, giving 0x33008eaa
+            // represented in memory as [0xaa, 0x8e, 0x00, 0x33]
+            //
+            // i2s transmits the first half-word, from memory [0xaa, 0x8e] = 0x8eaa
+            // i2s transmits the other half-word, from memory [0x00, 0x33] = 0x3300
             for w in grant.as_mut_slice_of::<u32>().unwrap().iter_mut() {
+                // This should compile as a single REV instruction on arm
                 *w = *w << 16 | *w >> 16;
             }
             grant.commit(bytes_received);
             defmt::debug!("WC:        +{:#05x}", bytes_received);
             defmt::debug!("USB :: received {} bytes of audio data", bytes_received);
-            //fake_i2s::spawn_after(500.micros()).unwrap();
+            let buffered_byte_count = cx.shared.buffered_byte_count.lock(|x| {*x += bytes_received; *x});
+
+            match *cx.local.rx_rate_timestamp {
+                None => {
+                    *cx.local.rx_rate_timestamp = Some(monotonics::now());
+                    *cx.local.rx_bytes = 0;
+                },
+                Some(last) => {
+                    *cx.local.rx_bytes += bytes_received;
+                    let micros = monotonics::now() - last;
+                    if micros >= 1.secs::<1, 1000000>() {
+                        let rate = *cx.local.rx_bytes as u32 * (micros.ticks() / 1000) / 1000;
+                        defmt::info!("USB RX Rate: {}", rate);
+                        defmt::info!("Buffered: {:#x}", buffered_byte_count);
+                        *cx.local.rx_bytes = 0;
+                        cx.local.rx_rate_timestamp.replace(monotonics::now());
+                    }
+                }
+            }
         }
         defmt::debug!("usb_handler: {}", monotonics::now() - start);
     }
 
-    // #[task(priority = 3, local = [consumer, count: usize = 0])]
-    // fn fake_i2s(cx: fake_i2s::Context) {
-    //     let consumer = cx.local.consumer;
-
-    //     match consumer.read() {
-    //         Ok(grant) => {
-    //             let len = grant.len();
-    //             defmt::debug!("fake_i2s :: 0x{:x} bytes", len);
-    //             if *cx.local.count % 1000 == 0 {
-    //                 defmt::info!("{=[?]:04x}", grant.as_slice_of::<u16>().unwrap());
-    //             }
-    //             *cx.local.count += 1;
-    //             grant.release(len);
-    //         },
-    //         Err(_) => defmt::error!("fake_i2s :: consumer.read() failed"),
-    //     }
-    // }
-
+    #[inline(never)]
+    #[link_section = ".data.i2s_dma_handler"]
     #[task(binds = DMA1_STREAM4, priority = 3, local = [
         i2s_dma,
         consumer,
         active_grant: Option<GrantR<'static, BUFFER_SIZE>> = None,
-        count: usize = 0,
-    ])]
-    fn i2s_dma_handler(cx: i2s_dma_handler::Context) {
+    ],
+    shared = [buffered_byte_count])]
+    fn i2s_dma_handler(mut cx: i2s_dma_handler::Context) {
+        let start = monotonics::now();
         let active_grant = cx.local.active_grant;
         let consumer = cx.local.consumer;
         let i2s_dma = cx.local.i2s_dma;
@@ -311,12 +334,7 @@ mod app {
             i2s_dma.clear_transfer_complete_interrupt();
 
             match active_grant.take() {
-                Some(g) => {
-                    //defmt::info!("RR:                         +{:#05x}", 192);
-                    //let len = g.len();
-                    //g.release(len);
-                    drop(g)
-                },
+                Some(g) => drop(g),
                 None => {},
             }
 
@@ -324,12 +342,17 @@ mod app {
                 Err(_) => {
                     defmt::debug!("i2s_dma :: Failed to read grant");
                     unsafe { i2s_dma.next_transfer_with(|buf, _| (buf, buf)).unwrap(); }
+                    *active_grant = None;
                 },
                 Ok(mut grant) => {
+                    cx.shared.buffered_byte_count.lock(|x| *x -= grant.len());
                     defmt::debug!("RG:                  {:#06x} +{:#05x}", grant.buf().as_ptr() as usize - 0x2001e690, grant.len());
                     let words: &'static [u16] = unsafe { grant.as_static_buf() }.as_slice_of::<u16>().unwrap();
                     defmt::debug!("i2s_dma :: Writing {} half-words", words.len());
                     i2s_dma.next_transfer(words).unwrap();
+                    let now = monotonics::now();
+                    let delay = now - start;
+                    if delay > 5.micros::<1, 1000000>() { defmt::info!("i2s_dma :: {} delay", delay); }
                     grant.to_release(grant.len());
                     active_grant.replace(grant);
                 }
@@ -339,9 +362,10 @@ mod app {
     }
 
     #[task(binds = SPI2, priority = 1)]
-    fn i2s_handler(cx: i2s_handler::Context) {
+    fn i2s_handler(_cx: i2s_handler::Context) {
         let spi2 = unsafe { &(*SPI2::ptr()) };
         defmt::debug!("I2S TXE: {}", spi2.sr.read().txe().bit());
-        defmt::debug!("I2S UDR: {}", spi2.sr.read().udr().bit());
+        if spi2.sr.read().udr().bit_is_set() { defmt::warn!("I2S :: Underrurn") }
+
     }
 }
