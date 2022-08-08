@@ -327,17 +327,6 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
     }
 
     fn reset(&mut self) {
-        let otg_global = unsafe { &*pac::OTG_FS_GLOBAL::ptr() };
-
-        // Unmask a couple extra interrupts:
-        // * IISOIXFRM - incomplete isochronous IN transfers
-        // * EOPF - end of periodic frame
-        otg_global.gintmsk.modify(|_,w| {
-            w
-                .iisoixfrm().set_bit()
-                .eopfm().set_bit()
-                //.eopfm().set_bit()
-        });
     }
 
     fn poll(&mut self) {
