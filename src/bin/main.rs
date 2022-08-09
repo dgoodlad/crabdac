@@ -5,6 +5,8 @@ use crabdac_firmware as _;
 
 #[rtic::app(device = stm32f4xx_hal::pac, dispatchers = [TIM3, TIM4])]
 mod app {
+    use core::iter;
+
     use aligned::{Aligned, A4};
     use stm32f4xx_hal::{
         prelude::*,
@@ -54,8 +56,12 @@ mod app {
 
     use byte_slice_cast::*;
 
+    use crabdac_firmware::decibels::DECIBELS;
     use crabdac_firmware::sof_timer::SofTimer;
     use crabdac_firmware::uac::simple_stereo_output::SimpleStereoOutput;
+
+    use fixed::{FixedI32, types::extra::U31};
+    type Sample = FixedI32<U31>;
 
     use ringbuf::{
         Consumer,
@@ -286,9 +292,23 @@ mod app {
                 // i2s transmits the first half-word, from memory [0xaa, 0x8e] = 0x8eaa
                 // i2s transmits the other half-word, from memory [0x00, 0x33] = 0x3300
                 if cx.local.producer.free_len() >= bytes_received / 4 {
-                    cx.local.producer.push_iter(
-                        &mut cx.local.buf[0..bytes_received].as_slice_of::<u32>().unwrap().iter().map(|s| s << 16 | s >> 16)
-                    );
+                    if usb_audio.mute {
+                        cx.local.producer.push_iter(&mut iter::repeat(0u32).take(bytes_received / 4));
+                    } else {
+                        let volume_multiplier = match usb_audio.volume {
+                            0 => Sample::from_num(1 as i32),
+                            decibels => Sample::from_bits(DECIBELS[((decibels >> 8) + 127) as usize]),
+                        };
+
+                        cx.local.producer.push_iter(
+                            &mut cx.local.buf[0..bytes_received].as_slice_of::<i32>().unwrap().iter()
+                                .map(|s| Sample::from_bits(*s))
+                                .map(|s| s * volume_multiplier)
+                                .map(|s| s.to_bits() as u32)
+                                .map(|s| s << 16 | s >> 16)
+                        );
+
+                    }
                 }
             }
         }

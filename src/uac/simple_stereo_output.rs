@@ -44,6 +44,8 @@ pub struct SimpleStereoOutput<'a, B: UsbBus> {
     audio_subframe_size: usize,
     #[allow(dead_code)]
     audio_bit_resolution: usize,
+    #[allow(dead_code)]
+    audio_data_buffer_size: usize,
 
     clock_source: EntityId,
     input_terminal: EntityId,
@@ -127,6 +129,7 @@ where
             sample_rate,
             audio_subframe_size,
             audio_bit_resolution,
+            audio_data_buffer_size,
             clock_source,
             input_terminal,
             feature_unit,
@@ -449,7 +452,7 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
                                                 defmt::debug!("usb audio :: GET VOLUME Range");
                                                 return xfer.accept_with(&[
                                                     0x01, 0x00, // 1 sub-range
-                                                    0x00, 0x82, // -127 dB min
+                                                    0x00, 0xA6, // -90 dB min
                                                     0x00, 0x00, // +0   dB max
                                                     0x00, 0x01, // 1    dB resolution
                                                 ]).unwrap();
