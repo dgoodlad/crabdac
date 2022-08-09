@@ -295,10 +295,7 @@ mod app {
                     if usb_audio.mute {
                         cx.local.producer.push_iter(&mut iter::repeat(0u32).take(bytes_received / 4));
                     } else {
-                        let volume_multiplier = match usb_audio.volume {
-                            0 => Sample::from_num(1 as i32),
-                            decibels => Sample::from_bits(DECIBELS[((decibels >> 8) + 127) as usize]),
-                        };
+                        let volume_multiplier = Sample::from_bits(DECIBELS[((usb_audio.volume >> 8) + 127) as usize]);
 
                         cx.local.producer.push_iter(
                             &mut cx.local.buf[0..bytes_received].as_slice_of::<i32>().unwrap().iter()
