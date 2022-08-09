@@ -6,6 +6,7 @@ use defmt_rtt as _; // global logger
 use panic_probe as _;
 
 pub mod decibels;
+pub mod i2s;
 pub mod sof_timer;
 pub mod uac;
 
