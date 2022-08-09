@@ -158,11 +158,6 @@ where
     }
 
     pub fn write_raw_feedback(&mut self, value: u32) -> Result<usize, UsbError> {
-        defmt::debug!("usb audio feedback :: frame {:x}", unsafe {
-            let otg_device = &*pac::OTG_FS_DEVICE::ptr();
-            otg_device.dsts.read().fnsof().bits()
-        });
-
         let buffer: &[u8] = &value.to_ne_bytes()[0..3];
         defmt::debug!("usb audio feedback :: value {:x}", buffer);
         self.audio_feedback_needed = false;
