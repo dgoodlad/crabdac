@@ -374,7 +374,7 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
                                         } else if cs_request.control_selector == FU_VOLUME_CONTROL {
                                             let data = xfer.data();
                                             self.volume = i16::from_le_bytes([data[0], data[1]]);
-                                            defmt::info!("usb audio :: Set Volume = {:?}", self.volume);
+                                            defmt::debug!("usb audio :: Set Volume = {:?}", self.volume);
                                             return xfer.accept().unwrap();
                                         }
                                     }
