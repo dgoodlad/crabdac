@@ -1,7 +1,7 @@
 #![no_main]
 #![no_std]
 
-use stm32f4xx_hal as hal; // memory layout
+use stm32f4xx_hal as _; // memory layout
 use defmt_rtt as _; // global logger
 use panic_probe as _;
 

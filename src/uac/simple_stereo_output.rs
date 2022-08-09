@@ -1,12 +1,7 @@
-use core::ops::BitAnd;
-
-use bytemuck::cast_slice;
 use usb_device::{
     class_prelude::*,
     endpoint::{Endpoint, Out, In}
 };
-
-use crate::hal::pac;
 
 use crate::uac::{descriptors::{AudioControlAllocator, descriptor_type::CS_INTERFACE, feature_unit_control_selector::{FU_MUTE_CONTROL, FU_VOLUME_CONTROL}, clock_source_control_selectors}, request::{RequestCode, Target}};
 
@@ -49,8 +44,6 @@ pub struct SimpleStereoOutput<'a, B: UsbBus> {
     audio_subframe_size: usize,
     #[allow(dead_code)]
     audio_bit_resolution: usize,
-
-    audio_data_buffer_size: usize,
 
     clock_source: EntityId,
     input_terminal: EntityId,
@@ -134,7 +127,6 @@ where
             sample_rate,
             audio_subframe_size,
             audio_bit_resolution,
-            audio_data_buffer_size,
             clock_source,
             input_terminal,
             feature_unit,
