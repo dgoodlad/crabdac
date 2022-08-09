@@ -134,7 +134,7 @@ where
             input_terminal,
             feature_unit,
             output_terminal,
-            mute: false,
+            mute: true,
             volume: 0x0000,
             alt_setting: 0,
             audio_data_available: false,
