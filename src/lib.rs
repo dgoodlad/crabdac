@@ -7,6 +7,7 @@ use panic_probe as _;
 
 pub mod decibels;
 pub mod i2s;
+pub mod pcm1794a;
 pub mod sof_timer;
 pub mod uac;
 
