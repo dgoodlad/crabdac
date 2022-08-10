@@ -16,7 +16,16 @@ jobs:
 
     steps:
     - uses: actions/checkout@v3
+    - name: Install latest nightly
+      uses: actions-rs/toolchain@v1
+      with:
+          toolchain: stable
+          override: true
+          target: thumbv7em-none-eabi
+          components: rustfmt, clippy, llvm-tools-preview
+    
     - name: Build
-      run: cargo build --verbose
-    - name: Run tests
-      run: cargo test --verbose
+      run: cargo build --release --verbose
+
+    - name: Size
+      run: cargo size --release
