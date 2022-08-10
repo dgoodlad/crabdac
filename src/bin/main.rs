@@ -23,9 +23,17 @@ mod app {
             Alternate,
             PA0,
             PA3,
+            PA4,
+            PA6,
+            PA7,
+            PB0,
+            PB2,
+            PB10,
             PB12,
             PB13,
             PB15,
+            Output,
+            PushPull,
         },
         i2s::{
             I2s,
@@ -57,6 +65,7 @@ mod app {
     use byte_slice_cast::*;
 
     use crabdac_firmware::decibels::DECIBELS;
+    use crabdac_firmware::pcm1794a;
     use crabdac_firmware::sof_timer::SofTimer;
     use crabdac_firmware::uac::simple_stereo_output::SimpleStereoOutput;
 
@@ -77,6 +86,17 @@ mod app {
     const MAX_FRAME_SIZE: usize = CHANNELS * USB_SAMPLE_SIZE * MAX_SAMPLES_PER_FRAME;
     const BUFFER_SIZE_WORDS: usize = 512;
 
+    type I2sPins = (PB12, PB13, PA3, PB15);
+    // Pins: (RST, MONO, CHSL, MUTE, FMT0, FMT1)
+    type DacPins = (
+        PA4<Output<PushPull>>,
+        PB10<Output<PushPull>>,
+        PB2<Output<PushPull>>,
+        PB0<Output<PushPull>>,
+        PA7<Output<PushPull>>,
+        PA6<Output<PushPull>>
+    );
+
     #[shared]
     struct Shared {
         #[lock_free]
@@ -85,12 +105,13 @@ mod app {
 
     #[local]
     struct Local {
+        dac: pcm1794a::Pcm1794a<DacPins>,
         sof_timer: SofTimer<TIM2, PA0<Alternate<1>>>,
 
         usb_dev: UsbDevice<'static, UsbBusType>,
         usb_audio: SimpleStereoOutput<'static, UsbBusType>,
 
-        i2s_dma: Transfer<Stream4<DMA1>, 0, I2sDriver<I2s<SPI2, (PB12, PB13, PA3, PB15)>, Master, Transmit, Philips>, MemoryToPeripheral, &'static [u16]>,
+        i2s_dma: Transfer<Stream4<DMA1>, 0, I2sDriver<I2s<SPI2, I2sPins>, Master, Transmit, Philips>, MemoryToPeripheral, &'static [u16]>,
         i2s_dma_buffer: &'static mut [u32],
 
         consumer: Consumer<u32, &'static StaticRb<u32, BUFFER_SIZE_WORDS>>,
@@ -137,6 +158,24 @@ mod app {
 
         let gpioa = cx.device.GPIOA.split();
         let gpiob = cx.device.GPIOB.split();
+
+        // (RST, MONO, CHSL, MUTE, FMT0, FMT1)
+        let dac_pins = (
+            gpioa.pa4.into_push_pull_output_in_state(stm32f4xx_hal::gpio::PinState::Low),
+            gpiob.pb10.into_push_pull_output_in_state(stm32f4xx_hal::gpio::PinState::Low),
+            gpiob.pb2.into_push_pull_output_in_state(stm32f4xx_hal::gpio::PinState::Low),
+            gpiob.pb0.into_push_pull_output_in_state(stm32f4xx_hal::gpio::PinState::High),
+            gpioa.pa7.into_push_pull_output_in_state(stm32f4xx_hal::gpio::PinState::Low),
+            gpioa.pa6.into_push_pull_output_in_state(stm32f4xx_hal::gpio::PinState::Low),
+        );
+
+        let mut dac = pcm1794a::Pcm1794a::new(dac_pins);
+
+        dac.configure(
+            pcm1794a::Format::I2S,
+            pcm1794a::Channels::Stereo,
+            pcm1794a::DfRolloff::Sharp
+        );
 
         let tim2_etr = gpioa.pa0.into_alternate();
         let sof_timer = SofTimer::new(cx.device.TIM2, tim2_etr);
@@ -204,13 +243,17 @@ mod app {
                 .half_transfer_interrupt(true)
                 .transfer_complete_interrupt(true),
         );
-        i2s_dma.start(|i2s| i2s.enable());
+        i2s_dma.start(|i2s| {
+            i2s.enable();
+            dac.enable();
+        });
 
         (
             Shared {
                 audio_feedback: (SAMPLE_RATE as u32 * 256 / 1000) << 6,
             },
             Local {
+                dac,
                 sof_timer,
                 usb_dev,
                 usb_audio,

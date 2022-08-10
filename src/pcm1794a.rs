@@ -44,22 +44,22 @@ where
         Ok(())
     }
 
-    fn dem(&mut self, dem: PinState) -> Result<(), Error> {
+    fn dem(&mut self, _dem: PinState) -> Result<(), Error> {
         Err(Error::Unsupported)
     }
 
     fn mute(&mut self, mute: PinState) -> Result<(), Error> {
-        self.4.set_state(PinState::from(mute)).unwrap();
+        self.3.set_state(PinState::from(mute)).unwrap();
         Ok(())
     }
 
     fn fmt0(&mut self, fmt0: PinState) -> Result<(), Error> {
-        self.5.set_state(PinState::from(fmt0)).unwrap();
+        self.4.set_state(PinState::from(fmt0)).unwrap();
         Ok(())
     }
 
     fn fmt1(&mut self, fmt1: PinState) -> Result<(), Error> {
-        self.6.set_state(PinState::from(fmt1)).unwrap();
+        self.5.set_state(PinState::from(fmt1)).unwrap();
         Ok(())
     }
 
@@ -167,7 +167,7 @@ pub struct Pcm1794a<P: Pins> {
 }
 
 impl<P: Pins> Pcm1794a<P> {
-    fn new(pins: P) -> Self {
+    pub fn new(pins: P) -> Self {
         Self { pins }
     }
 
@@ -177,6 +177,10 @@ impl<P: Pins> Pcm1794a<P> {
         let result = f(self);
         self.pin_rst(High).unwrap();
         result
+    }
+
+    pub fn enable(&mut self) -> Result<(), Error> {
+        self.pin_rst(High)
     }
 
     /// "Safely" configure the DAC by muting first, putting it into reset,
