@@ -175,7 +175,7 @@ mod app {
             pcm1794a::Format::I2S,
             pcm1794a::Channels::Stereo,
             pcm1794a::DfRolloff::Sharp
-        );
+        ).unwrap();
 
         let tim2_etr = gpioa.pa0.into_alternate();
         let sof_timer = SofTimer::new(cx.device.TIM2, tim2_etr);
@@ -245,7 +245,7 @@ mod app {
         );
         i2s_dma.start(|i2s| {
             i2s.enable();
-            dac.enable();
+            dac.enable().unwrap();
         });
 
         (
