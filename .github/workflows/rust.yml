@@ -16,13 +16,17 @@ jobs:
 
     steps:
     - uses: actions/checkout@v3
-    - name: Install latest nightly
+
+    - name: Install ARM toolchain
       uses: actions-rs/toolchain@v1
       with:
           toolchain: stable
           override: true
           target: thumbv7em-none-eabi
           components: rustfmt, clippy, llvm-tools-preview
+
+    - name: Install flip-link
+      run: cargo install flip-link
     
     - name: Build
       run: cargo build --release --verbose
