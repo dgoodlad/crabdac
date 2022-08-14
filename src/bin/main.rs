@@ -134,13 +134,14 @@ mod app {
 
         let rcc = cx.device.RCC.constrain();
         let clocks = rcc.cfgr
-                        .use_hse(25.MHz())
+                        .use_hse(8.MHz())
                         .sysclk(96.MHz())
                         .hclk(96.MHz())
                         .pclk1(48.MHz())
                         .pclk2(96.MHz())
-                        .i2s_clk(98304.kHz()) // 96 kHz * 256 * 4 to generate MCLK
-                        //.i2s_ckin(49152.kHz()) // 49.152 MHz = 96 kHz * 256 * 2
+                        //.i2s_clk(98304.kHz()) // 96 kHz * 256 * 4 to generate MCLK
+                        .i2s_ckin(49152.kHz()) // 49.152 MHz = 96 kHz * 256 * 2
+                        .i2s_clk(49152.kHz())
                         .require_pll48clk()
                         .freeze();
 
@@ -213,7 +214,7 @@ mod app {
             .transmit()
             .standard(Philips)
             .data_format(DataFormat::Data24Channel32)
-            .master_clock(true)
+            .master_clock(false)
             .request_frequency(SAMPLE_RATE as u32);
         let mut i2s_driver = I2sDriver::new(i2s, i2s_config);
         i2s_driver.set_tx_dma(true);
@@ -295,6 +296,7 @@ mod app {
         usb_dev,
         usb_audio,
         producer,
+        dac,
         buf: [u8; MAX_FRAME_SIZE] = [0; MAX_FRAME_SIZE],
     ],
     shared = [audio_feedback])]
@@ -304,6 +306,8 @@ mod app {
         let usb_audio: &mut SimpleStereoOutput<UsbBusType> = cx.local.usb_audio;
 
         if usb_dev.poll(&mut [usb_audio]) {
+            cx.local.dac.set_mute(usb_audio.mute).unwrap();
+
             if usb_audio.audio_feedback_needed {
                 match usb_audio.write_raw_feedback(*cx.shared.audio_feedback) {
                     Ok(_) => defmt::debug!("USB :: Feedback OK {0=14..24}.{0=0..14}", *cx.shared.audio_feedback),
