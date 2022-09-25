@@ -1,0 +1,5 @@
+[default.general]
+chip = "STM32F411CCUx"
+
+[with_rtt.rtt]
+enabled = true
