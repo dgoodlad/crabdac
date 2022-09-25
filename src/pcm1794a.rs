@@ -1,7 +1,7 @@
 use core::convert::Infallible;
 
-use embedded_hal::digital::{blocking::*, PinState, ErrorType};
-use embedded_hal::digital::PinState::{Low, High};
+use embedded_hal_one::digital::{blocking::*, PinState, ErrorType};
+use embedded_hal_one::digital::PinState::{Low, High};
 
 #[derive(Debug)]
 pub enum Error {
