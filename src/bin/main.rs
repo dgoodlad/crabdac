@@ -315,7 +315,7 @@ mod app {
         let usb_audio: &mut SimpleStereoOutput<UsbBusType> = cx.local.usb_audio;
 
         if usb_dev.poll(&mut [usb_audio]) {
-            cx.local.dac.set_mute(usb_audio.mute).unwrap();
+            cx.local.dac.set_mute(usb_audio.mute()).unwrap();
 
             if usb_audio.audio_feedback_needed {
                 match usb_audio.write_raw_feedback(*cx.shared.audio_feedback) {
@@ -348,10 +348,10 @@ mod app {
                 // i2s transmits the first half-word, from memory [0xaa, 0x8e] = 0x8eaa
                 // i2s transmits the other half-word, from memory [0x00, 0x33] = 0x3300
                 if cx.local.producer.free_len() >= bytes_received / 4 {
-                    if usb_audio.mute {
+                    if usb_audio.mute() {
                         cx.local.producer.push_iter(&mut iter::repeat(0u32).take(bytes_received / 4));
                     } else {
-                        let volume_multiplier = Sample::from_bits(DECIBELS[((usb_audio.volume >> 8) + 127) as usize]);
+                        let volume_multiplier = Sample::from_bits(DECIBELS[((usb_audio.volume() >> 8) + 127) as usize]);
 
                         cx.local.producer.push_iter(
                             &mut cx.local.buf[0..bytes_received].as_slice_of::<i32>().unwrap().iter()

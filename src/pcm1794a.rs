@@ -262,5 +262,6 @@ impl<P: Pins> Pcm1794a<P> {
     fn pin_mute(&mut self, mute: PinState) -> Result<(), Error> { self.pins.mute(mute) }
     fn pin_fmt0(&mut self, fmt0: PinState) -> Result<(), Error> { self.pins.fmt0(fmt0) }
     fn pin_fmt1(&mut self, fmt1: PinState) -> Result<(), Error> { self.pins.fmt1(fmt1) }
+    #[allow(dead_code)]
     fn pin_zero(&self) -> Result<PinState, Error> { self.pins.zero() }
 }

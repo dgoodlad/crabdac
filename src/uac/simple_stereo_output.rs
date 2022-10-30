@@ -1,9 +1,12 @@
+use core::u8;
+
 use usb_device::{
     class_prelude::*,
-    endpoint::{Endpoint, Out, In}
+    endpoint::{Endpoint, Out, In},
+    Result as UsbResult,
 };
 
-use crate::uac::{descriptors::{AudioControlAllocator, descriptor_type::CS_INTERFACE, feature_unit_control_selector::{FU_MUTE_CONTROL, FU_VOLUME_CONTROL}, clock_source_control_selectors}, request::{RequestCode, Target}};
+use crate::uac::{descriptors::{AudioControlAllocator, descriptor_type::CS_INTERFACE, feature_unit_control_selector::{FU_MUTE_CONTROL, FU_VOLUME_CONTROL}}, request::{RequestCode, Target}};
 
 use super::{descriptors::{
     self,
@@ -29,14 +32,15 @@ use super::{descriptors::{
         AS_VAL_ALT_SETTINGS_CONTROL,
         AS_ACT_ALT_SETTING_CONTROL
     },
-    EntityId
-}, request::ControlRequest, ClockCounter, StreamingState};
+    EntityId, clock_source_control_selectors::CS_SAM_FREQ_CONTROL
+}, request::{ControlRequest, Target::Interface}, ClockCounter, StreamingState};
 
 pub struct SimpleStereoOutput<'a, B: UsbBus> {
-    if_audio_control: InterfaceNumber,
-    if_audio_stream: InterfaceNumber,
     ep_audio_data: EndpointOut<'a, B>,
     ep_feedback: EndpointIn<'a, B>,
+
+    audio_control: AudioControlInterface,
+    audio_streaming: AudioStremingInterface,
 
     #[allow(dead_code)]
     sample_rate: u32,
@@ -47,15 +51,9 @@ pub struct SimpleStereoOutput<'a, B: UsbBus> {
     #[allow(dead_code)]
     audio_data_buffer_size: usize,
 
-    clock_source: EntityId,
     input_terminal: EntityId,
-    feature_unit: EntityId,
     output_terminal: EntityId,
 
-    pub mute: bool,
-    pub volume: i16,
-
-    alt_setting: u8,
     pub audio_data_available: bool,
     pub audio_feedback_needed: bool,
     pub enable_disable: Option<StreamingState>,
@@ -121,22 +119,28 @@ where
         let feature_unit = entity_allocator.alloc_entity();
         let output_terminal = entity_allocator.alloc_entity();
 
+        let audio_control = AudioControlInterface{
+            if_number: if_audio_control,
+            clock_source: ClockSource { entity_id: clock_source, sample_rate: 96000 },
+            feature_unit: FeatureUnit { entity_id: feature_unit, mute: true, volume: 0 }
+        };
+
+        let audio_streaming = AudioStremingInterface {
+            if_number: if_audio_stream,
+            state: StreamingState::Disabled,
+        };
+
         Self {
-            if_audio_control,
-            if_audio_stream,
+            audio_control,
+            audio_streaming,
             ep_audio_data,
             ep_feedback,
             sample_rate,
             audio_subframe_size,
             audio_bit_resolution,
             audio_data_buffer_size,
-            clock_source,
             input_terminal,
-            feature_unit,
             output_terminal,
-            mute: true,
-            volume: 0x0000,
-            alt_setting: 0,
             audio_data_available: false,
             audio_feedback_needed: false,
             enable_disable: None,
@@ -164,14 +168,6 @@ where
         self.ep_feedback.write(buffer)
     }
 
-    fn set_alt(&mut self, alt: u8) {
-        if alt != self.alt_setting {
-            if alt == 0 { self.disable_stream(); }
-            if alt == 1 { self.enable_stream(); }
-        }
-        self.alt_setting = alt;
-    }
-
     fn enable_stream(&mut self) {
         defmt::info!("usb audio :: Enabling audio stream");
         self.enable_disable.replace(StreamingState::Enabled);
@@ -182,6 +178,14 @@ where
         defmt::info!("usb audio :: Disabling audio stream");
         self.enable_disable.replace(StreamingState::Disabled);
         self.audio_feedback_needed = false;
+    }
+
+    pub fn volume(&self) -> i16 {
+        self.audio_control.feature_unit.volume
+    }
+
+    pub fn mute(&self) -> bool {
+        self.audio_control.feature_unit.mute
     }
 }
 
@@ -204,7 +208,7 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
         defmt::debug!("usb audio :: iad");
         // Interface Association Descriptor
         writer.iad(
-            self.if_audio_control,
+            self.audio_control.if_number,
             2, // 2 Interfaces: 1 AudioControl, 1 AudioStreaming
             audio_function_class::AUDIO_FUNCTION,
             audio_function_subclass::FUNCTION_SUBCLASS_UNDEFINED,
@@ -213,7 +217,7 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
         // Standard AC Interface Descriptor
         defmt::debug!("usb audio :: interface");
         writer.interface(
-            self.if_audio_control,
+            self.audio_control.if_number,
             audio_interface_class::AUDIO,
             audio_interface_subclass::AUDIOCONTROL,
             audio_interface_protocol::IP_VERSION_02_00
@@ -225,7 +229,7 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
             &mut buf,
         );
         ac_interface_descriptor_writer.ac_interface_clock_source(
-            self.clock_source,
+            self.audio_control.clock_source.entity_id,
             ClockAttributes::build(descriptors::ClockType::InternalProgrammable, false),
             ClockControls::new(),
             Some(self.output_terminal),
@@ -234,13 +238,13 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
             self.input_terminal,
             terminal_type::USB_STREAMING.to_le_bytes(),
             None,
-            Some(self.clock_source),
+            Some(self.audio_control.clock_source.entity_id),
             ChannelConfig::new(None).front_left().front_right(),
             InputTerminalControls::new(),
             None,
         )?;
         ac_interface_descriptor_writer.ac_interface_feature_unit(
-            self.feature_unit,
+            self.audio_control.feature_unit.entity_id,
             self.input_terminal,
             FeatureUnitControls::new()
                 .mute(descriptors::ControlCapabilities::HostProgrammable)
@@ -251,8 +255,8 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
             self.output_terminal,
             terminal_type::OUTPUT_HEADPHONES.to_le_bytes(),
             None,
-            self.feature_unit,
-            self.clock_source,
+            self.audio_control.feature_unit.entity_id,
+            self.audio_control.clock_source.entity_id,
             0x00, // No output terminal controls
             None,
         )?;
@@ -260,13 +264,13 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
         ac_interface_descriptor_writer.write_into(writer)?;
         defmt::debug!("usb audio :: streaming interface");
         writer.interface(
-            self.if_audio_stream,
+            self.audio_streaming.if_number,
             audio_interface_class::AUDIO,
             audio_interface_subclass::AUDIOSTREAMING,
             audio_interface_protocol::IP_VERSION_02_00
         )?;
         defmt::debug!("usb audio :: streaming interface alt");
-        writer.interface_alt(self.if_audio_stream, 1, AUDIO, AUDIOSTREAMING, IP_VERSION_02_00, None)?;
+        writer.interface_alt(self.audio_streaming.if_number, 1, AUDIO, AUDIOSTREAMING, IP_VERSION_02_00, None)?;
         let bm_formats: u32 = PCM;
         let channels = ChannelConfig::new(None).front_left().front_right().channels();
         defmt::debug!("usb audio :: streaming interface cs");
@@ -330,13 +334,8 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
             control::RequestType::Standard => {
                 match request.request {
                     control::Request::SET_INTERFACE => {
-                        if request.index as u8 == u8::from(self.if_audio_stream) {
-                            match request.value {
-                                0 => xfer.accept().map(|_| self.set_alt(0) ).unwrap(),
-                                1 => xfer.accept().map(|_| self.set_alt(1) ).unwrap(),
-                                _ => { xfer.reject().unwrap(); },
-                            }
-                            defmt::debug!("SET_INTERFACE {}", self.alt_setting);
+                        if request.index as u8 == self.audio_streaming.if_number.into() {
+                            self.audio_streaming.control_out(xfer).unwrap()
                         }
                     },
                     control::Request::SET_ADDRESS => defmt::debug!("USB :: Set address {:?}", request.value),
@@ -356,36 +355,12 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
                 defmt::debug!("usb audio :: control out cs :: {:?}", cs_request);
 
                 match cs_request.target {
-                    Target::Interface(interface_number, entity_id) => {
-                        if interface_number == u8::from(self.if_audio_control) {
-                            defmt::debug!("usb audio :: control out cs :: audio control interface");
-                            match entity_id {
-                                None => {
-                                    // Control request directed at the interface itself
-                                    return xfer.reject().unwrap();
-                                },
-                                Some(entity_id) => {
-                                    defmt::debug!("usb audio :: control out cs :: audio control entity {:?}", entity_id);
-                                    if entity_id == u8::from(self.feature_unit) {
-                                        if cs_request.control_selector == FU_MUTE_CONTROL {
-                                            defmt::info!("usb audio :: Set Mute = {:?}", xfer.data());
-                                            self.mute = xfer.data()[0] != 0;
-                                            return xfer.accept().unwrap();
-                                        } else if cs_request.control_selector == FU_VOLUME_CONTROL {
-                                            let data = xfer.data();
-                                            self.volume = i16::from_le_bytes([data[0], data[1]]);
-                                            defmt::debug!("usb audio :: Set Volume = {:?}", self.volume);
-                                            return xfer.accept().unwrap();
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    },
+                    Target::Interface(interface_number, Some(_)) if interface_number == self.audio_control.if_number.into() => self.audio_control.control_out(&cs_request, xfer).unwrap(),
                     Target::Endpoint(endpoint_number) => {
                         defmt::debug!("usb audio :: control out cs :: endpoint number {:?}", endpoint_number);
                         return xfer.accept().unwrap();
-                    }
+                    },
+                    _ => return,
                 }
             },
             _ => { return; }
@@ -403,8 +378,9 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
             control::RequestType::Standard => {
                 match request.request {
                     control::Request::GET_INTERFACE => {
-                        if request.index as u8 == u8::from(self.if_audio_stream) {
-                            xfer.accept_with(&[self.alt_setting]).unwrap();
+                        // TODO implement standard get interface control request on AudioStreamingInterface
+                        if request.index as u8 == self.audio_streaming.if_number.into() {
+                            xfer.accept_with(&[self.audio_streaming.state as u8]).unwrap();
                         }
                     },
                     _ => { defmt::debug!("Unknown standard request {:?}", defmt::Debug2Format(request)); },
@@ -423,76 +399,9 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
                 defmt::debug!("usb audio :: control in cs :: {:?}", cs_request);
 
                 match cs_request.target {
-                    super::request::Target::Interface(interface_number, entity_id) => {
-                        if interface_number == u8::from(self.if_audio_control) {
-                            defmt::debug!("usb audio :: control in cs :: audio control interface");
-                            match entity_id {
-                                None => {
-                                    // Control request directed at the interface itself
-                                    return;
-                                },
-                                Some(entity_id) => {
-                                    defmt::debug!("usb audio :: control in cs :: audio control entity {:?}", entity_id);
-                                    if entity_id == u8::from(self.feature_unit) {
-                                        if cs_request.control_selector == descriptors::feature_unit_control_selector::FU_MUTE_CONTROL {
-                                            if cs_request.request_code == RequestCode::Cur {
-                                                defmt::debug!("usb audio :: GET MUTE Cur");
-                                                return xfer.accept_with(&[self.mute as u8]).unwrap();
-                                            }
-                                        } else if cs_request.control_selector == descriptors::feature_unit_control_selector::FU_VOLUME_CONTROL {
-                                            if cs_request.request_code == RequestCode::Cur {
-                                                defmt::debug!("usb audio :: GET VOLUME Cur");
-                                                return xfer.accept_with(&self.volume.to_le_bytes()).unwrap();
-                                            } else if cs_request.request_code == RequestCode::Range {
-                                                defmt::debug!("usb audio :: GET VOLUME Range");
-                                                return xfer.accept_with(&[
-                                                    0x01, 0x00, // 1 sub-range
-                                                    0x00, 0xC4, // -60 dB min
-                                                    0x00, 0x00, // +0   dB max
-                                                    0x00, 0x01, // 1    dB resolution
-                                                ]).unwrap();
-                                            }
-                                        }
-                                    } else if entity_id == u8::from(self.clock_source) {
-                                        if cs_request.control_selector == clock_source_control_selectors::CS_SAM_FREQ_CONTROL {
-                                            match cs_request.request_code {
-                                                RequestCode::Cur => {
-                                                    return xfer.accept_with(&(96000_u32.to_le_bytes())).unwrap();
-                                                },
-                                                RequestCode::Range => {
-                                                    let sample_rate = 96000_u32.to_le_bytes();
-                                                    return xfer.accept_with(&[
-                                                        0x01, 0x00, // 1 sub-range
-                                                        sample_rate[0], sample_rate[1], sample_rate[2], sample_rate[3],
-                                                        sample_rate[0], sample_rate[1], sample_rate[2], sample_rate[3],
-                                                        0x01, 0x00, 0x00, 0x00,
-                                                    ]).unwrap();
-                                                },
-                                                RequestCode::Mem => { return xfer.reject().unwrap(); }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        } else if interface_number == u8::from(self.if_audio_stream) && entity_id == None {
-                            if cs_request.control_selector == AS_ACT_ALT_SETTING_CONTROL {
-                                defmt::debug!("GET ALT_SETTING_CONTROL {}", self.alt_setting);
-                                return xfer.accept_with(&[self.alt_setting]).unwrap();
-                            } else if cs_request.control_selector == AS_VAL_ALT_SETTINGS_CONTROL {
-                                return xfer.accept_with(&[
-                                    // Length
-                                    0x01,
-                                    // Bitmask of current valid alternate settings
-                                    0b00000011,
-                                ]).unwrap();
-                            }
-                        } else {
-                            return xfer.reject().unwrap();
-                        }
-                    },
-                    super::request::Target::Endpoint(_endpoint_number) => {
-
-                    },
+                    Interface(interface_number, Some(_)) if interface_number == self.audio_control.if_number.into() => self.audio_control.cs_control_in(&cs_request, xfer).unwrap(),
+                    Interface(interface_number, None) if interface_number == self.audio_streaming.if_number.into() => self.audio_streaming.cs_control_in(&cs_request, xfer).unwrap(),
+                    _ => xfer.reject().unwrap()
                 }
             }
         }
@@ -511,5 +420,131 @@ impl<B: UsbBus> UsbClass<B> for SimpleStereoOutput<'_, B> {
     fn endpoint_in_complete(&mut self, addr: EndpointAddress) {
         defmt::debug!("Endpoint IN! {:?}", defmt::Debug2Format(&addr.index()));
         self.audio_feedback_needed = true;
+    }
+}
+
+struct AudioStremingInterface {
+    if_number: InterfaceNumber,
+    state: StreamingState,
+}
+
+impl AudioStremingInterface {
+    fn cs_control_in<B: UsbBus>(&self, req: &ControlRequest, xfer: ControlIn<B>) -> UsbResult<()> {
+        match req.control_selector {
+            AS_ACT_ALT_SETTING_CONTROL => xfer.accept_with(&[match self.state {
+                StreamingState::Disabled => 0,
+                StreamingState::Enabled => 1,
+            }]),
+            AS_VAL_ALT_SETTINGS_CONTROL => xfer.accept_with(&[
+                // Length
+                0x01,
+                // Bitmask of valid alternate settings
+                0b00000011,
+            ]),
+            _ => xfer.reject()
+        }
+    }
+
+    fn control_out<B: UsbBus>(&mut self, xfer: ControlOut<B>) -> UsbResult<()> {
+        match xfer.request().value {
+            0 => { self.state = StreamingState::Disabled; xfer.accept() },
+            1 => { self.state = StreamingState::Enabled; xfer.accept() },
+            _ => xfer.reject(),
+        }
+    }
+}
+
+struct AudioControlInterface {
+    if_number: InterfaceNumber,
+    feature_unit: FeatureUnit,
+    clock_source: ClockSource,
+}
+
+impl AudioControlInterface {
+    fn cs_control_in<B: UsbBus>(&self, req: &ControlRequest, xfer: ControlIn<B>) -> UsbResult<()> {
+        match req.target {
+            Interface(_, Some(entity_id)) if entity_id == self.feature_unit.entity_id.into() => self.feature_unit.cs_control_in(req, xfer),
+            Interface(_, Some(entity_id)) if entity_id == self.clock_source.entity_id.into() => self.clock_source.cs_control_in(req, xfer),
+            _ => Ok(())
+        }
+    }
+
+    fn control_out<B: UsbBus>(&mut self, req: &ControlRequest, xfer: ControlOut<B>) -> UsbResult<()> {
+        match req.target {
+            Interface(_, Some(entity_id)) if entity_id == self.feature_unit.entity_id.into() => self.feature_unit.cs_control_out(req, xfer),
+            Interface(_, Some(entity_id)) if entity_id == self.clock_source.entity_id.into() => self.clock_source.cs_control_out(req, xfer),
+            _ => Ok(())
+        }
+    }
+}
+
+struct FeatureUnit{
+    pub entity_id: EntityId,
+    pub mute: bool,
+    pub volume: i16,
+}
+
+impl FeatureUnit {
+    fn cs_control_in<B: UsbBus>(&self, req: &ControlRequest, xfer: ControlIn<B>) -> UsbResult<()> {
+        match (req.control_selector, req.request_code) {
+            (FU_MUTE_CONTROL, RequestCode::Cur) => xfer.accept_with(&[self.mute as u8]),
+            (FU_VOLUME_CONTROL, RequestCode::Cur) => xfer.accept_with(&self.volume.to_le_bytes()),
+            (FU_VOLUME_CONTROL, RequestCode::Range) => xfer.accept_with(&[
+                0x01, 0x00, // 1 sub-range
+                0x00, 0xC4, // -60 dB min
+                0x00, 0x00, // +0  dB max
+                0x00, 0x01, // 1 dB resolution
+            ]),
+            (_, _) => Ok(())
+        }
+    }
+    fn cs_control_out<B: UsbBus>(&mut self, req: &ControlRequest, xfer: ControlOut<B>) -> UsbResult<()> {
+        match (req.control_selector, req.length) {
+            (FU_MUTE_CONTROL, _) => {
+                self.mute = xfer.data()[0] != 0;
+                xfer.accept()
+            },
+            (FU_VOLUME_CONTROL, 2) => {
+                self.volume = i16::from_le_bytes(xfer.data().try_into().unwrap());
+                xfer.accept()
+            },
+            (_, _) => Ok(())
+        }
+    }
+}
+
+struct ClockSource{
+    entity_id: EntityId,
+    sample_rate: u32,
+}
+
+const SAMPLE_RATE: u32 = 96000;
+
+impl ClockSource {
+    fn cs_control_in<B: UsbBus>(&self, req: &ControlRequest, xfer: ControlIn<B>) -> UsbResult<()> {
+        match (req.control_selector, req.request_code) {
+            (CS_SAM_FREQ_CONTROL, RequestCode::Cur) => xfer.accept_with(&(self.sample_rate.to_le_bytes())),
+            (CS_SAM_FREQ_CONTROL, RequestCode::Range) => xfer.accept_with(&[
+                // 1 Sub-Range
+                0x01, 0x00,
+                // MIN = 96 kHz = 96000 = 0x17700
+                0x00, 0x77, 0x01, 0x00,
+                // MAX = 96 kHz
+                0x00, 0x77, 0x01, 0x00,
+                // RES = 0 (single value)
+                0x00, 0x00, 0x00, 0x00,
+            ]),
+            (_, _) => xfer.reject()
+        }
+    }
+
+    fn cs_control_out<B: UsbBus>(&mut self, req: &ControlRequest, xfer: ControlOut<B>) -> UsbResult<()> {
+        match (req.control_selector, req.request_code, req.length) {
+            (CS_SAM_FREQ_CONTROL, RequestCode::Cur, 4) => {
+                self.sample_rate = u32::from_le_bytes(xfer.data().try_into().unwrap());
+                xfer.accept()
+            },
+            (_, _, _) => Ok(())
+        }
     }
 }

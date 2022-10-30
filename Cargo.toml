@@ -2,7 +2,7 @@
 # TODO(1) fix `authors` and `name` if you didn't use `cargo-generate`
 authors = ["David Goodlad <david@goodlad.net>"]
 name = "crabdac-firmware"
-edition = "2018"
+edition = "2021"
 version = "0.1.0"
 
 [lib]
