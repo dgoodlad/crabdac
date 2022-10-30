@@ -8,7 +8,6 @@ mod app {
     use stm32f4xx_hal::{
         prelude::*,
         timer::MonoTimerUs,
-        timer::Timer,
         pac::TIM5
     };
 
@@ -31,7 +30,7 @@ mod app {
 
         let rcc = cx.device.RCC.constrain();
         let clocks = rcc.cfgr
-                        .use_hse(25.MHz())
+                        .use_hse(8.MHz())
                         .sysclk(96.MHz())
                         .hclk(96.MHz())
                         .pclk1(48.MHz())

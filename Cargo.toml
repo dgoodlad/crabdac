@@ -34,7 +34,7 @@ usb-device = { version = "0.2.9", features = ["control-buffer-256"] }
 [patch.crates-io]
 stm32f4xx-hal = { git = "https://github.com/stm32-rs/stm32f4xx-hal", branch = "master" }
 # This crate messes with memory.x in the released 0.2 version
-stm32_i2s_v12x = { git = "https://github.com/samcrow/stm32_i2s", branch = "master" }
+#stm32_i2s_v12x = { git = "https://github.com/samcrow/stm32_i2s", branch = "master" }
 # Include isochronous patch from rust-embedded-community/usb-device#60
 usb-device = { git = "https://github.com/ianrrees/usb-device", branch = "isochronous" }
 # Include isochronous support

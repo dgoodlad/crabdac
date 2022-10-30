@@ -96,6 +96,6 @@ where
     }
 
     pub fn get_period_clocks(&self) -> u32 {
-        self.tim.ccr1.read().ccr().bits()
+        self.tim.ccr1().read().ccr().bits()
     }
 }

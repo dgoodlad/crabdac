@@ -37,7 +37,7 @@ mod app {
         },
         i2s::{
             I2s,
-            stm32_i2s_v12x::driver::{*, I2sDriver},
+            stm32_i2s_v12x::driver::{*, I2sDriver}, NoMasterClock,
         },
         pac::{
             DMA1,
@@ -79,14 +79,17 @@ mod app {
     };
 
     const CHANNELS: usize = 2;
-    const USB_SAMPLE_SIZE: usize = 4;
-    const SAMPLE_RATE: usize = 96000;
+    const USB_SAMPLE_SIZE_BYTES: usize = 4;
+    const SAMPLE_RATE_HZ: usize = 96000;
     const USB_FRAME_RATE: usize = 1000;
-    const MAX_SAMPLES_PER_FRAME: usize = SAMPLE_RATE / USB_FRAME_RATE + 1;
-    const MAX_FRAME_SIZE: usize = CHANNELS * USB_SAMPLE_SIZE * MAX_SAMPLES_PER_FRAME;
+    const MAX_SAMPLES_PER_FRAME: usize = SAMPLE_RATE_HZ / USB_FRAME_RATE + 1;
+    const MAX_FRAME_SIZE: usize = CHANNELS * USB_SAMPLE_SIZE_BYTES * MAX_SAMPLES_PER_FRAME;
     const BUFFER_SIZE_WORDS: usize = 512;
 
+    // Pins: (WS, CK, MCK, SD)
     type I2sPins = (PB12, PB13, PA3, PB15);
+    //type I2sPins = (PB12, PB13, NoMasterClock, PB15);
+
     // Pins: (RST, MONO, CHSL, MUTE, FMT0, FMT1)
     type DacPins = (
         PA4<Output<PushPull>>,
@@ -139,9 +142,9 @@ mod app {
                         .hclk(96.MHz())
                         .pclk1(48.MHz())
                         .pclk2(96.MHz())
-                        //.i2s_clk(98304.kHz()) // 96 kHz * 256 * 4 to generate MCLK
-                        .i2s_ckin(49152.kHz()) // 49.152 MHz = 96 kHz * 256 * 2
-                        .i2s_clk(49152.kHz())
+                        .i2s_clk(98304.kHz()) // 96 kHz * 256 * 4 to generate MCLK
+                        //.i2s_ckin(49152.kHz()) // 49.152 MHz = 96 kHz * 256 * 2
+                        //.i2s_clk(49152.kHz())
                         .require_pll48clk()
                         .freeze();
 
@@ -159,6 +162,12 @@ mod app {
 
         let gpioa = cx.device.GPIOA.split();
         let gpiob = cx.device.GPIOB.split();
+
+        // Enable the I2S oscillator
+        //let pa1 = gpioa.pa1.into_push_pull_output_in_state(stm32f4xx_hal::gpio::PinState::High);
+        let _pa1 = gpioa.pa1.into_push_pull_output_in_state(stm32f4xx_hal::gpio::PinState::Low);
+        // Enable the headphone amplifier opamp
+        let _pa8 = gpioa.pa8.into_push_pull_output_in_state(stm32f4xx_hal::gpio::PinState::High);
 
         // (RST, MONO, CHSL, MUTE, FMT0, FMT1)
         let dac_pins = (
@@ -194,8 +203,8 @@ mod app {
 
         let usb_audio = SimpleStereoOutput::new(
             cx.local.usb_bus.as_ref().unwrap(),
-            96000,
-            4,
+            SAMPLE_RATE_HZ as u32,
+            USB_SAMPLE_SIZE_BYTES,
             24
         );
 
@@ -214,8 +223,8 @@ mod app {
             .transmit()
             .standard(Philips)
             .data_format(DataFormat::Data24Channel32)
-            .master_clock(false)
-            .request_frequency(SAMPLE_RATE as u32);
+            .master_clock(true)
+            .request_frequency(SAMPLE_RATE_HZ as u32);
         let mut i2s_driver = I2sDriver::new(i2s, i2s_config);
         i2s_driver.set_tx_dma(true);
         i2s_driver.set_tx_interrupt(false);
@@ -251,7 +260,7 @@ mod app {
 
         (
             Shared {
-                audio_feedback: (SAMPLE_RATE as u32 * 256 / 1000) << 6,
+                audio_feedback: (SAMPLE_RATE_HZ as u32 * 256 / 1000) << 6,
             },
             Local {
                 dac,
