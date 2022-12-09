@@ -3,7 +3,7 @@ pub mod request;
 pub mod simple_stereo_output;
 
 #[repr(u8)]
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone, Copy)]
 pub enum StreamingState {
     Enabled = 1,
     Disabled = 0,
