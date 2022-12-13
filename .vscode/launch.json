@@ -5,6 +5,7 @@
     "version": "0.2.0",
     "configurations": [
         {
+            //"preLaunchTask": "cargo build --bin main --debug",
             "type": "probe-rs-debug",
             "request": "launch",
             "name": "probe-rs main",
@@ -19,7 +20,8 @@
             "coreConfigs": [
                 {
                     "coreIndex": 0,
-                    "programBinary": "./target/thumbv7em-none-eabihf/debug/${workspaceFolderBasename}"
+                    "programBinary": "target/thumbv7em-none-eabi/debug/main",
+                    "svdFile": "stm32f411.svd"
                 }
             ]
         }
