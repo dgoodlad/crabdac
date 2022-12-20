@@ -1,11 +1,20 @@
 on: push
 name: Clippy check
 jobs:
+
   clippy_check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v1
-      - run: rustup component add clippy
+      
+      - name: Install ARM toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          target: thumbv7em-none-eabi
+          components: rustfmt, clippy, llvm-tools-preview
+
       - uses: actions-rs/clippy-check@v1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
